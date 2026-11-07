@@ -58,6 +58,18 @@ cache-verdict report
 
 `init` understands Cargo, Gradle, Next.js, npm (including pnpm, Yarn, and Bun lockfiles), Python, and Go. When several build systems match, pass `--ecosystem` to choose one. `init` never overwrites a reviewed config without `--force`.
 
+## Run the example
+
+[`examples/npm-build-cache/`](examples/npm-build-cache/) is a tiny npm project with a deliberately slow cold build and a fast warm build. From a checkout:
+
+```sh
+npm run example
+```
+
+The runner copies the example to a temporary directory, then runs `init`, two `run` samples, and `report` with this checkout's CLI. The temporary copy is removed afterwards, so nothing is written into the repository. The first sample is a cold miss, the second restores the stored cache, and the report should say `cache-pays`.
+
+To run the same flow by hand and inspect the config, ledger, and stored cache, see [the example README](examples/npm-build-cache/README.md).
+
 ## A real session
 
 Below is an actual run on a small npm demo project (macOS, Node 24): a `build` script in `package.json`, two files under `src/`, and a build that keeps a local cache under `node_modules/.cache`. Timings differ by machine; the verdict is computed from the medians in the ledger.
