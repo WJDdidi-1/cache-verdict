@@ -14,3 +14,12 @@ test('--help names the tool and its MVP', () => {
   const out = execFileSync(process.execPath, [bin, '--help'], { encoding: 'utf8' });
   if (!out.includes('cache-verdict')) throw new Error('help does not name the tool');
 });
+
+test('every subcommand documents itself with --help', () => {
+  for (const command of ['init', 'run', 'report', 'check', 'prune']) {
+    const out = execFileSync(process.execPath, [bin, command, '--help'], { encoding: 'utf8' });
+    if (!out.includes('Usage:') || !out.includes(`cache-verdict ${command}`)) {
+      throw new Error(`${command} --help is missing usage text`);
+    }
+  }
+});
