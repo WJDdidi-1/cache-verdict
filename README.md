@@ -1,5 +1,7 @@
 # cache-verdict
 
+[![version](https://img.shields.io/badge/version-0.1.0-blue)](https://github.com/WJDdidi-1/cache-verdict/blob/main/docs/releases/v0.1.0.md)
+
 Times build-cache cold vs warm runs and says whether the cache pays.
 
 ## Who it is for
@@ -13,6 +15,16 @@ Teams add a cache, watch the hit counter, and still ship slow or stale builds: a
 ## Why not the obvious answer
 
 actions/cache, Swatinem/rust-cache, and gradle/actions/setup-gradle only store and restore artifacts and report hit/miss; sccache --show-stats counts compiler hits but ignores restore cost and the end-to-end build; hyperfine times commands but not cache states. None answers whether a given cache key is net-positive for this build.
+
+## Releases
+
+This tree is version **0.1.0**. Release tags follow `v<version>`, so its tag is
+`v0.1.0`. The [v0.1.0 release notes](https://github.com/WJDdidi-1/cache-verdict/blob/main/docs/releases/v0.1.0.md)
+describe what shipped and how it was verified;
+[docs/RELEASING.md](https://github.com/WJDdidi-1/cache-verdict/blob/main/docs/RELEASING.md)
+is the checklist for creating the tag, the GitHub release, and the npm publish.
+Notes for every version live in
+[docs/releases/](https://github.com/WJDdidi-1/cache-verdict/tree/main/docs/releases/).
 
 ## Install
 
@@ -291,7 +303,7 @@ rm -rf .cache-verdict/
 
 ## Status
 
-Early MVP. The features above are the scope; anything not listed is not built yet.
+Early MVP, version 0.1.0. The features above are the scope; anything not listed is not built yet.
 
 ## License
 
