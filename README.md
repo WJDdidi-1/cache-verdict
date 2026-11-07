@@ -229,6 +229,66 @@ The same flow by hand:
 cache-verdict init && cache-verdict run && cache-verdict run && cache-verdict report
 ```
 
+## FAQ
+
+### Does cache-verdict run my build?
+
+Yes. `run` executes the `command` from `.cache-verdict.json` through your platform shell in the project directory and times that process. Inspect the detected command, inputs, and cache paths before the first sample:
+
+```sh
+cache-verdict init --dry-run
+```
+
+`--dry-run` prints the config to stdout and writes nothing.
+
+### How many runs do I need before the verdict means anything?
+
+One cold sample and one warm sample. The first `run` misses and stores the cache; the second restores that cache and hits. Until both exist, `check` exits 3 instead of inventing a verdict:
+
+```sh
+cache-verdict run && cache-verdict run && cache-verdict check
+```
+
+### Why does my report say `cache-unobserved`?
+
+There are four causes: `cachePath` is empty, no samples have been recorded, only one cold sample exists, or a warm sample arrived without a cold baseline. `report` prints the exact reason. Fix `cachePath` in `.cache-verdict.json` if it is empty, otherwise add the missing sample:
+
+```sh
+cache-verdict run --cold
+```
+
+### Does `run` replace or delete my real cache directory?
+
+It moves each declared `cachePath` aside, restores a previously stored cache for the current key if one exists (a normal `run`, not `--cold`), then times the build and leaves the directory as that run produced it. The pre-run contents are put back only if the build fails. Review the declared paths first:
+
+```sh
+cat .cache-verdict.json
+```
+
+### Does it upload my numbers anywhere?
+
+No. The CLI has no network code and records everything under `.cache-verdict/` in your project. To inspect the computed analysis directly:
+
+```sh
+cache-verdict report --json
+```
+
+### Can I change the build command or ecosystem?
+
+Edit `command`, `inputs`, or `cachePath` in `.cache-verdict.json`, or regenerate the config with `--force`:
+
+```sh
+cache-verdict init --force --ecosystem npm --command "npm run build"
+```
+
+### How do I start over?
+
+Remove the measurement directory. The reviewed config stays in place:
+
+```sh
+rm -rf .cache-verdict/
+```
+
 ## Status
 
 Early MVP. The features above are the scope; anything not listed is not built yet.
