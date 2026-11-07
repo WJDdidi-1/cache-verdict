@@ -7,6 +7,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     strategy:
@@ -20,4 +27,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+      - name: install from the lockfile
+        run: npm ci --no-audit --no-fund
       - run: npm test
+      - name: the packed package installs and runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf ci-pack ci-smoke
+          mkdir -p ci-pack ci-smoke
+          npm pack --pack-destination ci-pack >/dev/null
+          tarball="$(ls ci-pack/cache-verdict-*.tgz)"
+          cd ci-smoke
+          npm init -y >/dev/null
+          npm install "../$tarball" --no-audit --no-fund >/dev/null
+          npm exec -- cache-verdict --version
+          npm exec -- cache-verdict --help >/dev/null
