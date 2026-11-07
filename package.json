@@ -1,0 +1,20 @@
+{
+  "name": "cache-verdict",
+  "version": "0.1.0",
+  "description": "Times build-cache cold vs warm runs and says whether the cache pays",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "cache-verdict": "./bin/cache-verdict.mjs"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/WJDdidi-1/cache-verdict.git"
+  }
+}

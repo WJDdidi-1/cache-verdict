@@ -1,0 +1,104 @@
+name: publish
+
+# A release is a tag that says which version it is. Nothing else publishes.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: build, test and pack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: the tag and package.json must agree
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          declared="$(node -p "require('./package.json').version")"
+          test "$tag" = "$declared" || { echo "tag ${GITHUB_REF_NAME} != package.json $declared"; exit 1; }
+      - name: install from the lockfile when there is one
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+      - run: npm test
+      - name: no secrets or stray files in the tarball
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          npm pack --pack-destination dist
+          tar -tzf dist/*.tgz > files.txt
+          ! grep -E '(^|/)(\.env|\.npmrc|id_rsa|credentials\.json|\.dsh)(/|$)' files.txt
+          node -e "const p=require('./package.json'); if(!p.name||!p.version||!p.license) process.exit(1)"
+      - name: install the tarball in a clean directory
+        run: |
+          set -euo pipefail
+          mkdir -p smoke && cd smoke
+          npm init -y >/dev/null
+          npm install ../dist/*.tgz
+          node -e "const p=require('../package.json'); const bin=Object.values(p.bin||{})[0]; if(!bin) process.exit(0); require('child_process').execFileSync(process.execPath, ['../'+bin, '--version'], {stdio:'inherit'})"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball
+          path: dist/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish to npm with provenance
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+      - name: an npm that speaks OIDC
+        run: npm install --global npm@^11.5.1 && npm --version
+      - uses: actions/download-artifact@v4
+        with:
+          name: tarball
+          path: dist
+      - name: is this version already on the registry?
+        id: registry
+        run: |
+          set -euo pipefail
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "$name@$version is already on the registry; nothing to publish"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: publish the verified tarball
+        if: steps.registry.outputs.already == 'false'
+        run: npm publish ./dist/*.tgz --provenance --access public
+      - name: the registry serves it and a clean install works
+        run: |
+          set -euo pipefail
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          for i in $(seq 1 30); do
+            npm view "$name@$version" version >/dev/null 2>&1 && break
+            sleep 10
+          done
+          test "$(npm view "$name" version)" = "$version"
