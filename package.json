@@ -7,6 +7,10 @@
   "bin": {
     "cache-verdict": "./bin/cache-verdict.mjs"
   },
+  "files": [
+    "bin",
+    "lib"
+  ],
   "scripts": {
     "test": "node --test"
   },
