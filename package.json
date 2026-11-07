@@ -22,10 +22,12 @@
   },
   "files": [
     "bin",
-    "lib"
+    "lib",
+    "examples"
   ],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "example": "node examples/run.mjs"
   },
   "engines": {
     "node": ">=18"

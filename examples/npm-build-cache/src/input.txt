@@ -1,0 +1,5 @@
+cache-verdict example input
+
+This file is an input to the cache key. Editing it produces a new key,
+which makes the next build cold again instead of restoring an artifact
+for different content.

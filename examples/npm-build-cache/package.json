@@ -1,0 +1,10 @@
+{
+  "name": "cache-verdict-example-npm-build-cache",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Runnable cache-verdict example: a slow cold build that is fast when the cache is restored",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  }
+}
