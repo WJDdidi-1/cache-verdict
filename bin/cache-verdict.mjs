@@ -10,9 +10,13 @@ import {
 import {
   CONFIG_FILENAME,
   buildConfig,
+  loadConfig,
   serializeConfig,
   writeConfig,
 } from '../lib/config.mjs';
+import { pruneStore, readLedger, storeStats } from '../lib/ledger.mjs';
+import { analyzeSamples, formatReport } from '../lib/report.mjs';
+import { formatRunSummary, runSample } from '../lib/run.mjs';
 
 const VERSION = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
@@ -22,12 +26,25 @@ const USAGE = `cache-verdict: times build-cache cold vs warm runs and says wheth
 
 Usage:
   cache-verdict init [directory] [options]
+  cache-verdict run [directory] [--cold]
+  cache-verdict report [directory] [--json]
+  cache-verdict check [directory]
+  cache-verdict prune [directory] --keep <n>
   cache-verdict --help
   cache-verdict --version
 
 Commands:
   init    Detect Cargo, Gradle, Next.js, npm, Python, or Go in a project and
           write a reviewable .cache-verdict.json beside its build files.
+  run     Move declared cache dirs aside, restore a cache for the content-
+          addressed key when one exists, time the build, store the produced
+          artifacts, and append a sample to .cache-verdict/ledger.jsonl.
+  report  Print hit rate, median cold and warm totals, restore cost, net ms
+          per hit, cache size, and one verdict.
+  check   Exit 0 for cache-pays, 2 for cache-costs, cache-churns,
+          cache-never-hits, or cache-unobserved, and 3 when more runs are
+          needed before a verdict is possible.
+  prune   Evict least-recently-used stored cache keys.
 
 Init options:
   -e, --ecosystem <id>  Use this detector when several build systems match.
@@ -37,20 +54,52 @@ Init options:
       --dry-run         Print the config to stdout instead of writing it.
   -h, --help            Show this help.
 
+Run options:
+      --cold            Force a cold baseline sample. A stored cache is kept
+                        for the next normal run, so it does not prevent a hit.
+  -h, --help            Show this help.
+
+Report options:
+      --json            Print the analysis as JSON.
+  -h, --help            Show this help.
+
+Prune options:
+  -k, --keep <n>        Number of most-recently-used stored keys to retain.
+  -h, --help            Show this help.
+
 The config records the detected build command, the files whose contents make
 up the cache key, the cache paths to measure, and why the project was detected.
 Review and edit it before sampling. Detection order is Next.js, Cargo, Gradle,
 Go, Python, then npm; use --ecosystem to override.
 
+Measured files live under .cache-verdict/ in the project: ledger.jsonl is the
+append-only sample history and store/ holds one content-addressed cache per
+key. Add .cache-verdict/ to .gitignore.
+
 Exit codes:
-  0  success
-  1  no matching build system, unreadable directory, or existing config
-  2  invalid command-line usage
+  0  success; check found that the cache pays
+  1  no matching build system, unreadable directory, existing config, or a
+     failed build command
+  2  invalid command-line usage; check found a losing, churning, unobserved,
+     or never-hitting cache
+  3  check needs more runs before it can decide
 `;
 
 class UsageError extends Error {}
 
 class CliError extends Error {}
+
+function resolveDirectory(value) {
+  const directory = path.resolve(process.cwd(), value);
+  let stat;
+  try {
+    stat = statSync(directory);
+  } catch {
+    throw new CliError(`cannot read directory ${directory}`);
+  }
+  if (!stat.isDirectory()) throw new CliError(`${directory} is not a directory`);
+  return directory;
+}
 
 function parseInitOptions(args) {
   const options = {
@@ -113,6 +162,71 @@ function parseInitOptions(args) {
   return options;
 }
 
+function parseSimpleOptions(args, knownFlags) {
+  const options = { dir: '.', help: false };
+  for (const flag of knownFlags) options[flag] = false;
+  const positional = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === '--help' || argument === '-h') {
+      options.help = true;
+    } else if (argument === '--') {
+      positional.push(...args.slice(index + 1));
+      break;
+    } else if (argument.startsWith('-') && knownFlags.includes(argument.slice(2))) {
+      options[argument.slice(2)] = true;
+    } else if (argument.startsWith('-')) {
+      throw new UsageError(`unknown option ${argument}`);
+    } else {
+      positional.push(argument);
+    }
+  }
+
+  if (positional.length > 1) throw new UsageError('this command accepts at most one directory');
+  if (positional.length === 1) options.dir = positional[0];
+  return options;
+}
+
+function parsePruneOptions(args) {
+  const options = { dir: '.', keep: null, help: false };
+  const positional = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === '--help' || argument === '-h') {
+      options.help = true;
+    } else if (argument === '--keep' || argument === '-k') {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith('-')) {
+        throw new UsageError(`${argument} needs a count`);
+      }
+      options.keep = value;
+      index += 1;
+    } else if (argument.startsWith('--keep=')) {
+      options.keep = argument.slice('--keep='.length);
+    } else if (argument === '--') {
+      positional.push(...args.slice(index + 1));
+      break;
+    } else if (argument.startsWith('-')) {
+      throw new UsageError(`unknown option ${argument}`);
+    } else {
+      positional.push(argument);
+    }
+  }
+
+  if (positional.length > 1) throw new UsageError('prune accepts at most one directory');
+  if (positional.length === 1) options.dir = positional[0];
+  if (options.help) return options;
+
+  if (options.keep === null) throw new UsageError('prune needs --keep <n>');
+  if (!/^\d+$/.test(String(options.keep))) {
+    throw new UsageError('--keep needs a non-negative integer');
+  }
+  options.keep = Number(options.keep);
+  return options;
+}
+
 function init(args) {
   const options = parseInitOptions(args);
   if (options.help) {
@@ -126,15 +240,7 @@ function init(args) {
     );
   }
 
-  const directory = path.resolve(process.cwd(), options.dir);
-  let stat;
-  try {
-    stat = statSync(directory);
-  } catch {
-    throw new CliError(`cannot read directory ${directory}`);
-  }
-  if (!stat.isDirectory()) throw new CliError(`${directory} is not a directory`);
-
+  const directory = resolveDirectory(options.dir);
   const detection = detectProject(directory, { ecosystem: options.ecosystem });
   const config = buildConfig(detection, options.command === undefined ? {} : { command: options.command });
 
@@ -158,6 +264,87 @@ function init(args) {
   return 0;
 }
 
+function run(args) {
+  const options = parseSimpleOptions(args, ['cold']);
+  if (options.help) {
+    process.stdout.write(USAGE);
+    return 0;
+  }
+
+  const directory = resolveDirectory(options.dir);
+  const config = loadConfig(directory);
+  const sample = runSample(directory, { cold: options.cold });
+  console.log(formatRunSummary(sample, config));
+  return 0;
+}
+
+function analyzeProject(directory) {
+  const config = loadConfig(directory);
+  const samples = readLedger(directory);
+  const stats = storeStats(directory);
+  return analyzeSamples(samples, {
+    hasCachePaths: config.cachePath.length > 0,
+    storedKeys: stats.keys,
+    storedSizeBytes: stats.sizeBytes,
+  });
+}
+
+function report(args) {
+  const options = parseSimpleOptions(args, ['json']);
+  if (options.help) {
+    process.stdout.write(USAGE);
+    return 0;
+  }
+
+  const directory = resolveDirectory(options.dir);
+  const analysis = analyzeProject(directory);
+  if (options.json) {
+    console.log(JSON.stringify(analysis, null, 2));
+  } else {
+    process.stdout.write(formatReport(analysis));
+  }
+  return 0;
+}
+
+function check(args) {
+  const options = parseSimpleOptions(args, []);
+  if (options.help) {
+    process.stdout.write(USAGE);
+    return 0;
+  }
+
+  const directory = resolveDirectory(options.dir);
+  const analysis = analyzeProject(directory);
+  process.stdout.write(formatReport(analysis));
+
+  if (analysis.moreRunsNeeded) {
+    process.stderr.write(
+      'cache-verdict: not enough samples yet; run the build again before gating CI\n',
+    );
+    return 3;
+  }
+  if (analysis.verdict === 'cache-pays') return 0;
+
+  process.stderr.write(`cache-verdict: ${analysis.verdict}; the cache did not pay for itself\n`);
+  return 2;
+}
+
+function prune(args) {
+  const options = parsePruneOptions(args);
+  if (options.help) {
+    process.stdout.write(USAGE);
+    return 0;
+  }
+
+  const directory = resolveDirectory(options.dir);
+  loadConfig(directory);
+  const result = pruneStore(directory, options.keep);
+  console.log(
+    `Kept ${result.kept.length} stored key${result.kept.length === 1 ? '' : 's'}; evicted ${result.evicted.length}.`,
+  );
+  return 0;
+}
+
 function main(argv) {
   if (argv.length === 0) {
     process.stdout.write(USAGE);
@@ -175,6 +362,10 @@ function main(argv) {
     return 0;
   }
   if (command === 'init') return init(rest);
+  if (command === 'run') return run(rest);
+  if (command === 'report') return report(rest);
+  if (command === 'check') return check(rest);
+  if (command === 'prune') return prune(rest);
   if (command.startsWith('-')) throw new UsageError(`unknown option ${command}`);
   throw new UsageError(`unknown command "${command}"`);
 }
@@ -187,6 +378,6 @@ try {
     process.exitCode = 2;
   } else {
     process.stderr.write(`cache-verdict: ${error.message}\n`);
-    process.exitCode = 1;
+    process.exitCode = Number.isInteger(error.exitCode) ? error.exitCode : 1;
   }
 }
