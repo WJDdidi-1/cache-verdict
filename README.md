@@ -18,9 +18,26 @@ actions/cache, Swatinem/rust-cache, and gradle/actions/setup-gradle only store a
 
 ```sh
 npm install -g cache-verdict
+cache-verdict --version
 ```
 
-Requires Node.js 18 or newer. The package has no runtime dependencies, and the only files it writes inside a project are `.cache-verdict.json` and the `.cache-verdict/` measurement directory.
+Requires Node.js 18 or newer. The package has no runtime dependencies.
+
+To install the current checkout before a release is on npm:
+
+```sh
+npm install -g .
+cache-verdict --version
+```
+
+To install the exact tarball that CI verifies:
+
+```sh
+npm pack
+npm install -g ./cache-verdict-0.1.0.tgz
+```
+
+The only files `cache-verdict` writes inside a project are `.cache-verdict.json` and the `.cache-verdict/` measurement directory.
 
 ## Quick start
 
@@ -40,6 +57,62 @@ cache-verdict report
 ```
 
 `init` understands Cargo, Gradle, Next.js, npm (including pnpm, Yarn, and Bun lockfiles), Python, and Go. When several build systems match, pass `--ecosystem` to choose one. `init` never overwrites a reviewed config without `--force`.
+
+## A real session
+
+Below is an actual run on a small npm demo project (macOS, Node 24): a `build` script in `package.json`, two files under `src/`, and a build that keeps a local cache under `node_modules/.cache`. Timings differ by machine; the verdict is computed from the medians in the ledger.
+
+```console
+$ cache-verdict init
+Detected npm from package.json.
+Wrote .cache-verdict.json.
+note: npm's download cache defaults to ~/.npm; set npm_config_cache=.npm in CI to keep it project-local and measurable.
+Review "command", "inputs", and "cachePath" before sampling.
+
+$ cache-verdict run
+
+> build
+> node build.mjs
+
+built from source
+cache-verdict: MISS (cold)
+  key:     sha256:7daa0feeabc43045ad5ee427775d0f9a302c6bc0b725cedc95b642283d102181
+  command: npm run build
+  restore: 0.0 ms
+  build:   416.6 ms
+  total:   416.6 ms
+  size:    105 bytes
+
+$ cache-verdict run
+
+> build
+> node build.mjs
+
+built from cache
+cache-verdict: HIT (warm)
+  key:     sha256:7daa0feeabc43045ad5ee427775d0f9a302c6bc0b725cedc95b642283d102181
+  command: npm run build
+  restore: 0.8 ms
+  build:   166.9 ms
+  total:   167.7 ms
+  size:    105 bytes
+
+$ cache-verdict report
+Runs: 2 (1 hit, 1 miss)
+Hit rate: 50.0%
+Median cold total: 416.6 ms
+Median warm total: 167.7 ms
+Restore cost: 0.8 ms
+Net ms per hit: 248.9 ms
+Cache size: 105 B across 1 stored key
+Verdict: cache-pays
+Reason: warm builds are 248.9 ms faster per hit after paying the restore cost
+
+$ cache-verdict check >/dev/null && echo "the cache pays"
+the cache pays
+```
+
+The warm run restored the cached artifact in 0.8 ms and skipped the expensive part of the build, so a hit is worth about 249 ms here. `check` exits 0 in this state, 2 when the cache loses, and 3 before there are enough samples to decide.
 
 ## What the MVP does
 
@@ -126,7 +199,7 @@ cache-verdict run --cold
 
 ## How we know it works
 
-`npm test` runs 25 tests. The end-to-end tests build throwaway projects and assert:
+`npm test` runs 25 tests. CI runs the suite on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22, then packs the tarball, installs it into a clean project, and runs the installed `cache-verdict` command. The end-to-end tests build throwaway projects and assert:
 
 - an identical key restores on the second run and reports `cache-pays` with exit 0;
 - a slower warm build reports `cache-costs` with exit 2;
@@ -148,6 +221,8 @@ cache-verdict init && cache-verdict run && cache-verdict run && cache-verdict re
 
 Early MVP. The features above are the scope; anything not listed is not built yet.
 
-## Licence
+## License
 
-Apache-2.0.
+Apache-2.0. See [LICENSE](LICENSE).
+
+Copyright 2026 WJDdidi-1.

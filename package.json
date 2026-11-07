@@ -3,6 +3,19 @@
   "version": "0.1.0",
   "description": "Times build-cache cold vs warm runs and says whether the cache pays",
   "license": "Apache-2.0",
+  "keywords": [
+    "build-cache",
+    "cache",
+    "ci",
+    "cold-start",
+    "benchmark",
+    "cargo",
+    "gradle",
+    "nextjs",
+    "npm",
+    "python",
+    "go"
+  ],
   "type": "module",
   "bin": {
     "cache-verdict": "./bin/cache-verdict.mjs"
@@ -20,5 +33,9 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/WJDdidi-1/cache-verdict.git"
+  },
+  "homepage": "https://github.com/WJDdidi-1/cache-verdict#readme",
+  "bugs": {
+    "url": "https://github.com/WJDdidi-1/cache-verdict/issues"
   }
 }
