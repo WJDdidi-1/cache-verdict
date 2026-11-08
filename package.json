@@ -1,6 +1,6 @@
 {
   "name": "cache-verdict",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Times build-cache cold vs warm runs and says whether the cache pays",
   "license": "Apache-2.0",
   "keywords": [
@@ -21,6 +21,7 @@
     "cache-verdict": "./bin/cache-verdict.mjs"
   },
   "files": [
+    "CHANGELOG.md",
     "bin",
     "lib",
     "examples"
