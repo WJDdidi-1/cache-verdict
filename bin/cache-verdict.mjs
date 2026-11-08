@@ -284,6 +284,7 @@ function analyzeProject(directory) {
   const stats = storeStats(directory);
   return analyzeSamples(samples, {
     hasCachePaths: config.cachePath.length > 0,
+    cachePaths: config.cachePath,
     storedKeys: stats.keys,
     storedSizeBytes: stats.sizeBytes,
   });
@@ -325,7 +326,7 @@ function check(args) {
   }
   if (analysis.verdict === 'cache-pays') return 0;
 
-  process.stderr.write(`cache-verdict: ${analysis.verdict}; the cache did not pay for itself\n`);
+  process.stderr.write(`cache-verdict: ${analysis.verdict}; ${analysis.reason}\n`);
   return 2;
 }
 
