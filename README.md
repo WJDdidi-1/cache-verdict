@@ -142,7 +142,7 @@ The warm run restored 46,735,665 bytes of cache in 14.6 ms and was 2397.1 ms fas
 ## What the MVP does
 
 - `cache-verdict init` detects Cargo, Gradle, Next.js, npm, Python, or Go and writes a reviewable `.cache-verdict.json`.
-- `cache-verdict run` content-addresses the declared inputs, moves declared cache dirs aside, restores the stored cache for that exact key when it exists, times the build from that known state, stores the produced artifacts, and appends one sample to `.cache-verdict/ledger.jsonl`.
+- `cache-verdict run` content-addresses the declared inputs, moves declared cache dirs aside, restores the stored cache for that exact key when it exists, times the build from that known state, stores the produced artifacts, and appends one sample to `.cache-verdict/ledger.jsonl` (or the `--ledger` / `CACHE_VERDICT_LEDGER` path).
 - `cache-verdict report` prints hit rate, median cold vs warm totals, restore cost, net ms per hit, cache size, and one verdict: `cache-pays`, `cache-costs`, `cache-churns`, `cache-never-hits`, or `cache-unobserved`.
 - `cache-verdict check` exits 2 on a losing, churning, or unobserved cache and 3 when more runs are needed, so CI can gate on the verdict.
 - `cache-verdict prune --keep N` evicts least-recently-used stored keys; `run --cold` adds a baseline sample without wedging the next hit.
@@ -181,7 +181,9 @@ The report uses medians so one noisy sample does not decide the verdict. `Net ms
 
 ## The ledger and stored cache
 
-Each sample is one JSON object on its own line in `.cache-verdict/ledger.jsonl`:
+The default ledger is `.cache-verdict/ledger.jsonl`. `run`, `report`, and `check` accept `--ledger <path>` to read and append a different file, and `CACHE_VERDICT_LEDGER` supplies the same path when the flag is absent. An explicit flag wins over the environment variable. Relative paths resolve from the current working directory, and omitting both keeps the historical default, so existing projects need no changes. The ledger path only moves the ledger: stored artifacts stay under `.cache-verdict/store/`.
+
+Each sample is one JSON object on its own line in the ledger:
 
 ```json
 {
@@ -200,9 +202,71 @@ Each sample is one JSON object on its own line in `.cache-verdict/ledger.jsonl`:
 }
 ```
 
-Stored artifacts live under `.cache-verdict/store/<key>/`. Add `.cache-verdict/` to `.gitignore`; it is measurement state, not source. Moving the declared cache dirs aside is what makes a cold sample genuinely cold. `prune` only removes stored keys, never ledger history.
+Stored artifacts live under `.cache-verdict/store/<key>/`. Add `.cache-verdict/` to `.gitignore`; it is measurement state, not source. If a custom ledger lives inside the checkout, add that path too. Moving the declared cache dirs aside is what makes a cold sample genuinely cold. `prune` only removes stored keys, never ledger history.
 
 ## CI gating
+
+By default every sample is appended to `.cache-verdict/ledger.jsonl`. That works for a job that builds twice, but a CI job that builds once per run starts from a fresh checkout and always sees a single sample, so `check` stays at exit 3. Put the ledger on a path that survives between builds with `--ledger <path>` or `CACHE_VERDICT_LEDGER`, and persist that path. Persist `.cache-verdict/store/` as well: the ledger decides the verdict, and the stored cache is what makes the next build a hit instead of another cold sample.
+
+This GitHub Actions job treats exit 3 as "keep collecting" and gates as soon as the ledger has enough samples. It assumes a reviewed `.cache-verdict.json` is committed to the repository:
+
+```yaml
+name: cache-verdict gate
+on: [push, pull_request]
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    env:
+      CACHE_VERDICT_LEDGER: .ci/cache-verdict/ledger.jsonl
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # actions/cache entries are immutable. Restore the newest matching entry,
+      # then save under a fresh key so this run's samples survive to the next.
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            .ci/cache-verdict/ledger.jsonl
+            .cache-verdict/store
+          key: cache-verdict-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            cache-verdict-${{ github.ref_name }}-
+
+      - run: npm ci
+
+      # The command appends one sample to CACHE_VERDICT_LEDGER.
+      - run: npx --yes cache-verdict@0.1.0 run
+
+      - name: Gate on the accumulated ledger
+        run: |
+          set +e
+          npx --yes cache-verdict@0.1.0 check
+          status=$?
+          set -e
+          if [ "$status" -eq 3 ]; then
+            echo "::notice::cache-verdict needs another build before it can decide"
+            exit 0
+          fi
+          exit "$status"
+
+      # Save even when the gate exits 2, so a losing verdict is still recorded.
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: |
+            .ci/cache-verdict/ledger.jsonl
+            .cache-verdict/store
+          key: cache-verdict-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+```
+
+On the first build the ledger gets one cold sample and `check` exits 3, which the gate treats as "not enough samples yet". A later build with the same key restores the stored cache, records a warm sample, and `check` returns a real verdict. On a platform without a cache action, persist the same two paths with a volume, artifact, or object store.
+
+If you want a hard gate immediately, build twice in one job instead:
 
 ```sh
 cache-verdict run
@@ -210,7 +274,7 @@ cache-verdict run
 cache-verdict check
 ```
 
-`check` prints the same report and then:
+`check` prints the same report as `report` and then:
 
 - exits 0 for `cache-pays`,
 - exits 2 for `cache-costs`, `cache-churns`, `cache-never-hits`, or `cache-unobserved`,
@@ -224,7 +288,7 @@ cache-verdict run --cold
 
 ## How we know it works
 
-`npm test` runs 26 tests. CI runs the suite on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22, then packs the tarball, installs it into a clean project, and runs the installed `cache-verdict` command. The published 0.1.0 tarball was also run end to end with `npx` on a fresh Next.js project outside this repository (numbers above and [validation record](docs/validation/nextjs-0.1.0.md)). The end-to-end tests build throwaway projects and assert:
+`npm test` runs 29 tests. CI runs the suite on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22, then packs the tarball, installs it into a clean project, and runs the installed `cache-verdict` command. The published 0.1.0 tarball was also run end to end with `npx` on a fresh Next.js project outside this repository (numbers above and [validation record](docs/validation/nextjs-0.1.0.md)). The end-to-end tests build throwaway projects and assert:
 
 - an identical key restores on the second run and reports `cache-pays` with exit 0;
 - a slower warm build reports `cache-costs` with exit 2;
@@ -234,6 +298,8 @@ cache-verdict run --cold
 - `run --cold` records a baseline while still allowing the next normal run to hit;
 - `prune --keep` evicts least-recently-used keys;
 - `run` refuses a cachePath that would move the project itself;
+- a custom `--ledger` path receives the samples that `run`, `report`, and `check` read, without writing the default ledger;
+- `CACHE_VERDICT_LEDGER` works between builds and `--ledger` overrides it;
 - `report --json` and the initial "not enough samples" check behave as documented.
 
 The same flow by hand:
