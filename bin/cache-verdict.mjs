@@ -14,7 +14,7 @@ import {
   serializeConfig,
   writeConfig,
 } from '../lib/config.mjs';
-import { pruneStore, readLedger, storeStats } from '../lib/ledger.mjs';
+import { ledgerPath, pruneStore, readLedger, storeStats } from '../lib/ledger.mjs';
 import { analyzeSamples, formatReport } from '../lib/report.mjs';
 import { formatRunSummary, runSample } from '../lib/run.mjs';
 
@@ -26,9 +26,9 @@ const USAGE = `cache-verdict: times build-cache cold vs warm runs and says wheth
 
 Usage:
   cache-verdict init [directory] [options]
-  cache-verdict run [directory] [--cold]
-  cache-verdict report [directory] [--json]
-  cache-verdict check [directory]
+  cache-verdict run [directory] [--cold] [--ledger <path>]
+  cache-verdict report [directory] [--json] [--ledger <path>]
+  cache-verdict check [directory] [--ledger <path>]
   cache-verdict prune [directory] --keep <n>
   cache-verdict --help
   cache-verdict --version
@@ -63,6 +63,12 @@ Report options:
       --json            Print the analysis as JSON.
   -h, --help            Show this help.
 
+Ledger options (run, report, and check):
+      --ledger <path>   Read or append samples at this file instead of
+                        .cache-verdict/ledger.jsonl. Relative paths resolve
+                        from the current directory. CACHE_VERDICT_LEDGER
+                        provides the same path when the flag is absent.
+
 Prune options:
   -k, --keep <n>        Number of most-recently-used stored keys to retain.
   -h, --help            Show this help.
@@ -74,7 +80,9 @@ Go, Python, then npm; use --ecosystem to override.
 
 Measured files live under .cache-verdict/ in the project: ledger.jsonl is the
 append-only sample history and store/ holds one content-addressed cache per
-key. Add .cache-verdict/ to .gitignore.
+key. Add .cache-verdict/ to .gitignore. To carry samples between CI builds, put
+the ledger on a persisted path with --ledger or CACHE_VERDICT_LEDGER; keep
+store/ too so later builds can still restore a cache for the same key.
 
 Exit codes:
   0  success; check found that the cache pays
@@ -162,18 +170,36 @@ function parseInitOptions(args) {
   return options;
 }
 
-function parseSimpleOptions(args, knownFlags) {
+function parseSimpleOptions(args, knownFlags, valueFlags = []) {
   const options = { dir: '.', help: false };
   for (const flag of knownFlags) options[flag] = false;
+  for (const flag of valueFlags) options[flag] = null;
   const positional = [];
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
+    const valueFlag = valueFlags.find(
+      (flag) => argument === `--${flag}` || argument.startsWith(`--${flag}=`),
+    );
+
     if (argument === '--help' || argument === '-h') {
       options.help = true;
     } else if (argument === '--') {
       positional.push(...args.slice(index + 1));
       break;
+    } else if (valueFlag !== undefined) {
+      if (argument.startsWith(`--${valueFlag}=`)) {
+        const value = argument.slice(`--${valueFlag}=`.length);
+        if (!value.trim()) throw new UsageError(`--${valueFlag} needs a path`);
+        options[valueFlag] = value;
+      } else {
+        const value = args[index + 1];
+        if (value === undefined || value.startsWith('-')) {
+          throw new UsageError(`--${valueFlag} needs a path`);
+        }
+        options[valueFlag] = value;
+        index += 1;
+      }
     } else if (argument.startsWith('-') && knownFlags.includes(argument.slice(2))) {
       options[argument.slice(2)] = true;
     } else if (argument.startsWith('-')) {
@@ -265,7 +291,7 @@ function init(args) {
 }
 
 function run(args) {
-  const options = parseSimpleOptions(args, ['cold']);
+  const options = parseSimpleOptions(args, ['cold'], ['ledger']);
   if (options.help) {
     process.stdout.write(USAGE);
     return 0;
@@ -273,14 +299,15 @@ function run(args) {
 
   const directory = resolveDirectory(options.dir);
   const config = loadConfig(directory);
-  const sample = runSample(directory, { cold: options.cold });
+  const ledger = ledgerPath(directory, options.ledger);
+  const sample = runSample(directory, { cold: options.cold, ledgerPath: ledger });
   console.log(formatRunSummary(sample, config));
   return 0;
 }
 
-function analyzeProject(directory) {
+function analyzeProject(directory, ledger) {
   const config = loadConfig(directory);
-  const samples = readLedger(directory);
+  const samples = readLedger(directory, ledger);
   const stats = storeStats(directory);
   return analyzeSamples(samples, {
     hasCachePaths: config.cachePath.length > 0,
@@ -291,14 +318,15 @@ function analyzeProject(directory) {
 }
 
 function report(args) {
-  const options = parseSimpleOptions(args, ['json']);
+  const options = parseSimpleOptions(args, ['json'], ['ledger']);
   if (options.help) {
     process.stdout.write(USAGE);
     return 0;
   }
 
   const directory = resolveDirectory(options.dir);
-  const analysis = analyzeProject(directory);
+  const ledger = ledgerPath(directory, options.ledger);
+  const analysis = analyzeProject(directory, ledger);
   if (options.json) {
     console.log(JSON.stringify(analysis, null, 2));
   } else {
@@ -308,19 +336,20 @@ function report(args) {
 }
 
 function check(args) {
-  const options = parseSimpleOptions(args, []);
+  const options = parseSimpleOptions(args, [], ['ledger']);
   if (options.help) {
     process.stdout.write(USAGE);
     return 0;
   }
 
   const directory = resolveDirectory(options.dir);
-  const analysis = analyzeProject(directory);
+  const ledger = ledgerPath(directory, options.ledger);
+  const analysis = analyzeProject(directory, ledger);
   process.stdout.write(formatReport(analysis));
 
   if (analysis.moreRunsNeeded) {
     process.stderr.write(
-      'cache-verdict: not enough samples yet; run the build again before gating CI\n',
+      `cache-verdict: not enough samples yet in ${ledger}; run the build again before gating CI\n`,
     );
     return 3;
   }

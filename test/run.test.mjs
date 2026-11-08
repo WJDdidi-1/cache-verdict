@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,12 +62,13 @@ function makeProject(t, build, configOverrides = {}) {
   return dir;
 }
 
-function runCli(cwd, args) {
+function runCli(cwd, args, options = {}) {
   try {
     const stdout = execFileSync(process.execPath, [bin, ...args], {
       cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
+      env: options.env ?? process.env,
     });
     return { status: 0, stdout, stderr: '' };
   } catch (error) {
@@ -79,11 +80,15 @@ function runCli(cwd, args) {
   }
 }
 
-function readLedger(dir) {
-  return readFileSync(path.join(dir, '.cache-verdict', 'ledger.jsonl'), 'utf8')
+function readLedgerFile(file) {
+  return readFileSync(file, 'utf8')
     .split(/\r?\n/)
     .filter((line) => line.trim() !== '')
     .map((line) => JSON.parse(line));
+}
+
+function readLedger(dir) {
+  return readLedgerFile(path.join(dir, '.cache-verdict', 'ledger.jsonl'));
 }
 
 function storeKeys(dir) {
@@ -312,4 +317,82 @@ test('run needs a config and check waits for a second sample', (t) => {
   const check = runCli(dir, ['check']);
   assert.equal(check.status, 3);
   assert.match(check.stderr, /not enough samples/);
+});
+
+test('--ledger writes, reads, and gates on a custom ledger path', (t) => {
+  const dir = makeProject(t, FAST_BUILD);
+  const custom = path.join(dir, 'ci-state', 'ledger.jsonl');
+  const defaultLedger = path.join(dir, '.cache-verdict', 'ledger.jsonl');
+
+  const waiting = runCli(dir, ['check', '--ledger', custom]);
+  assert.equal(waiting.status, 3);
+  assert.match(waiting.stderr, /not enough samples/);
+  assert.match(waiting.stderr, /ci-state/);
+
+  const cold = runCli(dir, ['run', '--ledger', custom]);
+  assert.equal(cold.status, 0, cold.stderr);
+  assert.match(cold.stdout, /MISS \(cold\)/);
+
+  const warm = runCli(dir, ['run', `--ledger=${custom}`]);
+  assert.equal(warm.status, 0, warm.stderr);
+  assert.match(warm.stdout, /HIT \(warm\)/);
+
+  const ledger = readLedgerFile(custom);
+  assert.equal(ledger.length, 2);
+  assert.equal(ledger[0].hit, false);
+  assert.equal(ledger[1].hit, true);
+  assert.equal(existsSync(defaultLedger), false, 'a custom ledger must not write the default ledger');
+
+  const report = runCli(dir, ['report', '--ledger', custom]);
+  assert.equal(report.status, 0, report.stderr);
+  assert.match(report.stdout, /Runs: 2 \(1 hit, 1 miss\)/);
+  assert.match(report.stdout, /Verdict: cache-pays/);
+
+  const json = runCli(dir, ['report', '--ledger', custom, '--json']);
+  assert.equal(json.status, 0, json.stderr);
+  assert.equal(JSON.parse(json.stdout).runs, 2);
+
+  const check = runCli(dir, ['check', '--ledger', custom]);
+  assert.equal(check.status, 0, check.stderr);
+  assert.match(check.stdout, /Verdict: cache-pays/);
+});
+
+test('CACHE_VERDICT_LEDGER persists samples across builds and --ledger overrides it', (t) => {
+  const dir = makeProject(t, FAST_BUILD);
+  const envLedger = path.join(dir, 'shared', 'ledger.jsonl');
+  const flagLedger = path.join(dir, 'flag', 'ledger.jsonl');
+  const env = { ...process.env, CACHE_VERDICT_LEDGER: path.join('shared', 'ledger.jsonl') };
+
+  const first = runCli(dir, ['run'], { env });
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(readLedgerFile(envLedger).length, 1);
+
+  // An explicit --ledger wins over the environment variable.
+  const second = runCli(dir, ['run', '--ledger', flagLedger], { env });
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(readLedgerFile(envLedger).length, 1);
+  assert.equal(readLedgerFile(flagLedger).length, 1);
+
+  const report = runCli(dir, ['report'], { env });
+  assert.equal(report.status, 0, report.stderr);
+  assert.match(report.stdout, /Runs: 1 \(0 hits, 1 miss\)/);
+  assert.match(report.stdout, /Verdict: cache-unobserved/);
+
+  const check = runCli(dir, ['check'], { env });
+  assert.equal(check.status, 3);
+  assert.match(check.stderr, /shared[/\\]ledger\.jsonl/);
+});
+
+test('--ledger rejects a missing path and is documented by run, report, and check', (t) => {
+  const dir = makeProject(t, FAST_BUILD);
+
+  const missing = runCli(dir, ['run', '--ledger']);
+  assert.equal(missing.status, 2);
+  assert.match(missing.stderr, /--ledger needs a path/);
+
+  for (const command of ['run', 'report', 'check']) {
+    const help = runCli(dir, [command, '--help']);
+    assert.equal(help.status, 0, help.stderr);
+    assert.match(help.stdout, /--ledger <path>/);
+  }
 });
