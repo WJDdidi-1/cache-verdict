@@ -183,6 +183,45 @@ writeFileSync('cache/marker', 'artifact');
   assert.equal(runCli(never, ['check']).status, 2);
 });
 
+test('report tells an empty cachePath apart from a populated cache that was missed', (t) => {
+  const empty = makeProject(t, '// the build writes no cache artifacts\n');
+  // Mirror a real project: the declared cache directory exists but stays empty.
+  mkdirSync(path.join(empty, 'cache'), { recursive: true });
+  assert.equal(runCli(empty, ['run']).status, 0);
+  assert.equal(runCli(empty, ['run']).status, 0);
+
+  const emptyReport = runCli(empty, ['report']);
+  assert.equal(emptyReport.status, 0, emptyReport.stderr);
+  assert.match(emptyReport.stdout, /Verdict: cache-never-hits/);
+  assert.match(
+    emptyReport.stdout,
+    /Reason: cachePath is empty: no cache artifacts were found under cache/,
+  );
+  assert.match(emptyReport.stdout, /\.cache-verdict\.json/);
+  assert.equal(JSON.parse(runCli(empty, ['report', '--json']).stdout).cacheState, 'empty');
+
+  const emptyCheck = runCli(empty, ['check']);
+  assert.equal(emptyCheck.status, 2);
+  assert.match(emptyCheck.stderr, /cachePath is empty/);
+
+  const populated = makeProject(t, `
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+appendFileSync('src/input.txt', 'changed\\n');
+mkdirSync('cache', { recursive: true });
+writeFileSync('cache/marker', 'artifact');
+`);
+  assert.equal(runCli(populated, ['run']).status, 0);
+  assert.equal(runCli(populated, ['run']).status, 0);
+
+  const populatedReport = runCli(populated, ['report']);
+  assert.equal(populatedReport.status, 0, populatedReport.stderr);
+  assert.match(populatedReport.stdout, /Verdict: cache-never-hits/);
+  assert.match(populatedReport.stdout, /Reason: the cache is populated \(/);
+  assert.doesNotMatch(populatedReport.stdout, /cachePath is empty/);
+  assert.equal(JSON.parse(runCli(populated, ['report', '--json']).stdout).cacheState, 'populated');
+  assert.equal(runCli(populated, ['check']).status, 2);
+});
+
 test('an empty cachePath is cache-unobserved rather than a fake hit rate', (t) => {
   const dir = makeProject(t, '// no cache is produced\n', {
     command: 'node build.mjs',
