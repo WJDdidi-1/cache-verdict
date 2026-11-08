@@ -35,6 +35,12 @@ cache-verdict --version
 
 Requires Node.js 18 or newer. The package has no runtime dependencies.
 
+Or run the published version without a global install:
+
+```sh
+npx cache-verdict@0.1.0 init
+```
+
 To install the current checkout before a release is on npm:
 
 ```sh
@@ -82,61 +88,56 @@ The runner copies the example to a temporary directory, then runs `init`, two `r
 
 To run the same flow by hand and inspect the config, ledger, and stored cache, see [the example README](examples/npm-build-cache/README.md).
 
-## A real session
+## Measured on a project outside this repository
 
-Below is an actual run on a small npm demo project (macOS, Node 24): a `build` script in `package.json`, two files under `src/`, and a build that keeps a local cache under `node_modules/.cache`. Timings differ by machine; the verdict is computed from the medians in the ledger.
+The published `cache-verdict@0.1.0` tarball was installed with `npx` into a fresh Next.js 15.5.29 App Router project outside this repository and run end to end. The project had a `next build` script, two routes, and no prior cache-verdict state; its declared cache path was Next.js's own `.next/cache`.
 
 ```console
-$ cache-verdict init
-Detected npm from package.json.
+$ npx --yes cache-verdict@0.1.0 init
+Detected Next.js from package.json, next.config.mjs.
 Wrote .cache-verdict.json.
-note: npm's download cache defaults to ~/.npm; set npm_config_cache=.npm in CI to keep it project-local and measurable.
+Also detected: npm. Use --ecosystem to choose one instead.
+note: Next.js stores build output in .next/cache; this path is measured.
 Review "command", "inputs", and "cachePath" before sampling.
 
-$ cache-verdict run
-
-> build
-> node build.mjs
-
-built from source
+$ npx --yes cache-verdict@0.1.0 run
+... Next.js build output omitted ...
 cache-verdict: MISS (cold)
-  key:     sha256:7daa0feeabc43045ad5ee427775d0f9a302c6bc0b725cedc95b642283d102181
+  key:     sha256:83b79b1063935dc084c2c3b2f2b018e2dac8848abfff92617679f044ba8e8bc6
   command: npm run build
   restore: 0.0 ms
-  build:   416.6 ms
-  total:   416.6 ms
-  size:    105 bytes
+  build:   7465.6 ms
+  total:   7465.6 ms
+  size:    46735665 bytes
 
-$ cache-verdict run
-
-> build
-> node build.mjs
-
-built from cache
+$ npx --yes cache-verdict@0.1.0 run
+... Next.js build output omitted ...
 cache-verdict: HIT (warm)
-  key:     sha256:7daa0feeabc43045ad5ee427775d0f9a302c6bc0b725cedc95b642283d102181
+  key:     sha256:83b79b1063935dc084c2c3b2f2b018e2dac8848abfff92617679f044ba8e8bc6
   command: npm run build
-  restore: 0.8 ms
-  build:   166.9 ms
-  total:   167.7 ms
-  size:    105 bytes
+  restore: 14.6 ms
+  build:   5053.9 ms
+  total:   5068.5 ms
+  size:    48814564 bytes
 
-$ cache-verdict report
+$ npx --yes cache-verdict@0.1.0 report
 Runs: 2 (1 hit, 1 miss)
 Hit rate: 50.0%
-Median cold total: 416.6 ms
-Median warm total: 167.7 ms
-Restore cost: 0.8 ms
-Net ms per hit: 248.9 ms
-Cache size: 105 B across 1 stored key
+Median cold total: 7465.6 ms
+Median warm total: 5068.5 ms
+Restore cost: 14.6 ms
+Net ms per hit: 2397.1 ms
+Cache size: 46.6 MiB across 1 stored key
 Verdict: cache-pays
-Reason: warm builds are 248.9 ms faster per hit after paying the restore cost
+Reason: warm builds are 2397.1 ms faster per hit after paying the restore cost
 
-$ cache-verdict check >/dev/null && echo "the cache pays"
-the cache pays
+$ npx --yes cache-verdict@0.1.0 check >/dev/null; echo $?
+0
 ```
 
-The warm run restored the cached artifact in 0.8 ms and skipped the expensive part of the build, so a hit is worth about 249 ms here. `check` exits 0 in this state, 2 when the cache loses, and 3 before there are enough samples to decide.
+The warm run restored 46,735,665 bytes of cache in 14.6 ms and was 2397.1 ms faster end to end, so `check` exited 0. Those are two samples on one machine, not a benchmark; run the same commands on your project before deciding. The [validation record](docs/validation/nextjs-0.1.0.md) has the artifact hash, environment, exact config, ledger rows, and the paths this run did not cover.
+
+`check` exits 0 for `cache-pays`, 2 for `cache-costs`, `cache-churns`, `cache-never-hits`, or `cache-unobserved`, and 3 before there are enough samples to decide.
 
 ## What the MVP does
 
@@ -223,7 +224,7 @@ cache-verdict run --cold
 
 ## How we know it works
 
-`npm test` runs 25 tests. CI runs the suite on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22, then packs the tarball, installs it into a clean project, and runs the installed `cache-verdict` command. The end-to-end tests build throwaway projects and assert:
+`npm test` runs 26 tests. CI runs the suite on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22, then packs the tarball, installs it into a clean project, and runs the installed `cache-verdict` command. The published 0.1.0 tarball was also run end to end with `npx` on a fresh Next.js project outside this repository (numbers above and [validation record](docs/validation/nextjs-0.1.0.md)). The end-to-end tests build throwaway projects and assert:
 
 - an identical key restores on the second run and reports `cache-pays` with exit 0;
 - a slower warm build reports `cache-costs` with exit 2;
