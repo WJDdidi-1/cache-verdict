@@ -208,6 +208,8 @@ Stored artifacts live under `.cache-verdict/store/<key>/`. Add `.cache-verdict/`
 
 By default every sample is appended to `.cache-verdict/ledger.jsonl`. That works for a job that builds twice, but a CI job that builds once per run starts from a fresh checkout and always sees a single sample, so `check` stays at exit 3. Put the ledger on a path that survives between builds with `--ledger <path>` or `CACHE_VERDICT_LEDGER`, and persist that path. Persist `.cache-verdict/store/` as well: the ledger decides the verdict, and the stored cache is what makes the next build a hit instead of another cold sample.
 
+This checkout supports the explicit ledger path. The published `cache-verdict@0.1.0` tarball predates it, so the pinned `@0.1.0` commands below cannot use it. Until a release contains the change, install the checkout (`npm install -g .`) or pack it, and use `cache-verdict` in place of `npx --yes cache-verdict@0.1.0`. When that release exists, replace the pinned version in the snippet with it. The two-build pattern was verified end to end with a scripted simulation; the [CI ledger validation record](docs/validation/ci-ledger-checkout.md) has the commands, output, and exit codes.
+
 This GitHub Actions job treats exit 3 as "keep collecting" and gates as soon as the ledger has enough samples. It assumes a reviewed `.cache-verdict.json` is committed to the repository:
 
 ```yaml
@@ -288,7 +290,7 @@ cache-verdict run --cold
 
 ## How we know it works
 
-`npm test` runs 29 tests. CI runs the suite on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22, then packs the tarball, installs it into a clean project, and runs the installed `cache-verdict` command. The published 0.1.0 tarball was also run end to end with `npx` on a fresh Next.js project outside this repository (numbers above and [validation record](docs/validation/nextjs-0.1.0.md)). The end-to-end tests build throwaway projects and assert:
+`npm test` runs 29 tests. CI runs the suite on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22, then packs the tarball, installs it into a clean project, and runs the installed `cache-verdict` command. The published 0.1.0 tarball was also run end to end with `npx` on a fresh Next.js project outside this repository (numbers above and [validation record](docs/validation/nextjs-0.1.0.md)). The two-build shared-ledger CI pattern was verified with a scripted simulation of two fresh checkouts; its [validation record](docs/validation/ci-ledger-checkout.md) shows the first `check` exiting 3 and the second exiting 0 after the ledger and store were persisted. The end-to-end tests build throwaway projects and assert:
 
 - an identical key restores on the second run and reports `cache-pays` with exit 0;
 - a slower warm build reports `cache-costs` with exit 2;
