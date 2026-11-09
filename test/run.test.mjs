@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { MAX_RECORDED_INPUTS, recordInputFiles } from '../lib/key.mjs';
+
 const bin = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'cache-verdict.mjs');
 
 const FAST_BUILD = `
@@ -186,6 +188,139 @@ writeFileSync('cache/marker', 'artifact');
   const report = runCli(never, ['report']);
   assert.match(report.stdout, /Verdict: cache-never-hits/);
   assert.equal(runCli(never, ['check']).status, 2);
+});
+
+test('report names a changed input and says when the recorded inputs are unchanged', (t) => {
+  const dir = makeProject(t, FAST_BUILD);
+
+  assert.equal(runCli(dir, ['run']).status, 0);
+  const first = readLedger(dir)[0];
+  assert.equal(first.inputCount, 2);
+  assert.equal(first.inputsTruncated, false);
+  assert.deepEqual(first.inputs.map((input) => input.path), ['build.mjs', 'src/input.txt']);
+  for (const input of first.inputs) assert.match(input.sha256, /^[a-f0-9]{64}$/);
+
+  // An identical input tree keeps both the key and the recorded hashes.
+  assert.equal(runCli(dir, ['run']).status, 0);
+  const ledger = readLedger(dir);
+  assert.equal(ledger[1].key, ledger[0].key);
+  assert.deepEqual(ledger[1].inputs, ledger[0].inputs);
+
+  const unchanged = runCli(dir, ['report']);
+  assert.equal(unchanged.status, 0, unchanged.stderr);
+  assert.match(unchanged.stdout, /Changed inputs since previous sample: none/);
+  const unchangedJson = JSON.parse(runCli(dir, ['report', '--json']).stdout);
+  assert.equal(unchangedJson.inputChanges.available, true);
+  assert.deepEqual(unchangedJson.inputChanges.paths, []);
+  assert.deepEqual(unchangedJson.inputChanges.changes, []);
+
+  // Changing one declared input changes the key and is named in the report.
+  writeFileSync(path.join(dir, 'src', 'input.txt'), 'B\n');
+  assert.equal(runCli(dir, ['run']).status, 0);
+  const changed = readLedger(dir);
+  assert.notEqual(changed[2].key, changed[1].key);
+  const before = changed[1].inputs.find((input) => input.path === 'src/input.txt').sha256;
+  const after = changed[2].inputs.find((input) => input.path === 'src/input.txt').sha256;
+  assert.notEqual(after, before);
+
+  const report = runCli(dir, ['report']);
+  assert.equal(report.status, 0, report.stderr);
+  assert.match(
+    report.stdout,
+    /Changed inputs since previous sample: src\/input\.txt \(modified\)/,
+  );
+  assert.match(report.stdout, /Verdict: cache-churns/);
+  assert.match(report.stdout, /Reason: .*src\/input\.txt \(modified\)/);
+
+  const json = JSON.parse(runCli(dir, ['report', '--json']).stdout);
+  assert.deepEqual(json.inputChanges.paths, ['src/input.txt']);
+  assert.deepEqual(json.inputChanges.changes, [
+    { path: 'src/input.txt', change: 'modified', before, after },
+  ]);
+});
+
+test('report still reads ledger samples written before input recording', (t) => {
+  const dir = makeProject(t, FAST_BUILD);
+  mkdirSync(path.join(dir, '.cache-verdict'), { recursive: true });
+  const rows = [
+    {
+      schemaVersion: 1,
+      timestamp: '2026-01-01T00:00:00.000Z',
+      key: `sha256:${'a'.repeat(64)}`,
+      hit: false,
+      cold: true,
+      warm: false,
+      buildMs: 100,
+      restoreMs: 0,
+      totalMs: 100,
+      sizeBytes: 2048,
+      restoreSizeBytes: 0,
+      stored: true,
+      command: 'node build.mjs',
+    },
+    {
+      schemaVersion: 1,
+      timestamp: '2026-01-01T00:01:00.000Z',
+      key: `sha256:${'a'.repeat(64)}`,
+      hit: true,
+      cold: false,
+      warm: true,
+      buildMs: 10,
+      restoreMs: 2,
+      totalMs: 12,
+      sizeBytes: 2048,
+      restoreSizeBytes: 2048,
+      stored: true,
+      command: 'node build.mjs',
+    },
+  ];
+  writeFileSync(
+    path.join(dir, '.cache-verdict', 'ledger.jsonl'),
+    `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`,
+  );
+
+  const report = runCli(dir, ['report']);
+  assert.equal(report.status, 0, report.stderr);
+  assert.match(
+    report.stdout,
+    /Changed inputs since previous sample: unavailable \(the last two samples do not both record input hashes/,
+  );
+  assert.match(report.stdout, /Verdict: cache-pays/);
+
+  const json = JSON.parse(runCli(dir, ['report', '--json']).stdout);
+  assert.equal(json.inputChanges.available, false);
+  assert.deepEqual(json.inputChanges.paths, []);
+  assert.equal(json.verdict, 'cache-pays');
+});
+
+test('ledger samples bound how many input hashes they record', () => {
+  const files = Array.from({ length: MAX_RECORDED_INPUTS + 5 }, (_, index) => ({
+    path: `src/file-${index}.txt`,
+    sha256: 'a'.repeat(64),
+  }));
+
+  const recorded = recordInputFiles(files);
+  assert.ok(recorded.files.length > 0);
+  assert.ok(recorded.files.length <= MAX_RECORDED_INPUTS);
+  assert.equal(recorded.totalFiles, files.length);
+  assert.equal(recorded.truncated, true);
+  assert.deepEqual(recorded.files[0], files[0]);
+
+  const byCount = recordInputFiles(files, {
+    maxFiles: MAX_RECORDED_INPUTS,
+    maxBytes: 1024 * 1024 * 1024,
+  });
+  assert.equal(byCount.files.length, MAX_RECORDED_INPUTS);
+  assert.equal(byCount.truncated, true);
+  assert.deepEqual(byCount.files.at(-1), files[MAX_RECORDED_INPUTS - 1]);
+
+  const oneFile = recordInputFiles(files, { maxFiles: 1, maxBytes: 1024 * 1024 });
+  assert.equal(oneFile.files.length, 1);
+  assert.equal(oneFile.truncated, true);
+
+  const noRoom = recordInputFiles(files, { maxFiles: MAX_RECORDED_INPUTS, maxBytes: 10 });
+  assert.deepEqual(noRoom.files, []);
+  assert.equal(noRoom.truncated, true);
 });
 
 test('report tells an empty cachePath apart from a populated cache that was missed', (t) => {

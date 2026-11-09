@@ -142,8 +142,8 @@ The warm run restored 46,735,665 bytes of cache in 14.6 ms and was 2397.1 ms fas
 ## What the MVP does
 
 - `cache-verdict init` detects Cargo, Gradle, Next.js, npm, Python, or Go and writes a reviewable `.cache-verdict.json`.
-- `cache-verdict run` content-addresses the declared inputs, moves declared cache dirs aside, restores the stored cache for that exact key when it exists, times the build from that known state, stores the produced artifacts, and appends one sample to `.cache-verdict/ledger.jsonl` (or the `--ledger` / `CACHE_VERDICT_LEDGER` path).
-- `cache-verdict report` prints hit rate, median cold vs warm totals, restore cost, net ms per hit, cache size, and one verdict: `cache-pays`, `cache-costs`, `cache-churns`, `cache-never-hits`, or `cache-unobserved`.
+- `cache-verdict run` content-addresses the declared inputs, moves declared cache dirs aside, restores the stored cache for that exact key when it exists, times the build from that known state, stores the produced artifacts, and appends one sample to `.cache-verdict/ledger.jsonl` (or the `--ledger` / `CACHE_VERDICT_LEDGER` path). The sample records the path and SHA-256 of each declared input, bounded so a huge input tree cannot bloat the ledger.
+- `cache-verdict report` prints hit rate, median cold vs warm totals, restore cost, net ms per hit, cache size, the paths that changed since the previous sample, and one verdict: `cache-pays`, `cache-costs`, `cache-churns`, `cache-never-hits`, or `cache-unobserved`.
 - `cache-verdict check` exits 2 on a losing, churning, or unobserved cache and 3 when more runs are needed, so CI can gate on the verdict.
 - `cache-verdict prune --keep N` evicts least-recently-used stored keys; `run --cold` adds a baseline sample without wedging the next hit.
 
@@ -164,7 +164,7 @@ The warm run restored 46,735,665 bytes of cache in 14.6 ms and was 2397.1 ms fas
 ```
 
 - `command` is the real build to time. It runs through the platform shell from the project directory.
-- `inputs` are paths or globs. Their contents, the command, and the declared cache paths are hashed into the cache key. A key never silently reuses a cache measured for a different command.
+- `inputs` are paths or globs. Their contents, the command, and the declared cache paths are hashed into the cache key. A key never silently reuses a cache measured for a different command. Each sample also records the path and SHA-256 of every matched input, so `report` can tell you which file changed the key.
 - `cachePath` is what cache-verdict moves aside, restores, sizes, and stores. It may be a directory, a file, a glob such as `**/__pycache__`, or an environment-expanded path such as `$GOCACHE`. An empty list is reported as `cache-unobserved`.
 
 ## What the verdicts mean
@@ -173,7 +173,7 @@ The warm run restored 46,735,665 bytes of cache in 14.6 ms and was 2397.1 ms fas
 | --- | --- |
 | `cache-pays` | A warm hit is faster than the cold baseline, after paying the measured restore cost. |
 | `cache-costs` | A warm hit is not faster than cold; the cache is not paying for itself. |
-| `cache-churns` | More than one key appears in the samples, so the key changes too often to accumulate hits reliably. |
+| `cache-churns` | More than one key appears in the samples, so the key changes too often to accumulate hits reliably. The report names the inputs that changed between the last two samples when they were recorded. |
 | `cache-never-hits` | At least two samples were taken and none restored a stored cache. |
 | `cache-unobserved` | There is no cache path, no ledger, only one cold sample, or no cold baseline yet. |
 
@@ -198,9 +198,20 @@ Each sample is one JSON object on its own line in the ledger:
   "sizeBytes": 104857600,
   "restoreSizeBytes": 104857600,
   "stored": true,
-  "command": "cargo build"
+  "command": "cargo build",
+  "inputs": [
+    { "path": "Cargo.lock", "sha256": "..." },
+    { "path": "Cargo.toml", "sha256": "..." },
+    { "path": "src/main.rs", "sha256": "..." }
+  ],
+  "inputCount": 3,
+  "inputsTruncated": false
 }
 ```
+
+`inputs` is the recorded path and SHA-256 of each declared input file, sorted by path. To keep an append-only ledger bounded, a sample records at most 500 files and roughly 48 KiB of input entries; when the matched input tree is larger, `inputsTruncated` is `true`, `inputCount` is the real number of hashed files, and the cache key still covers all of them.
+
+`report` compares the last two samples and prints a `Changed inputs since previous sample:` line: `none`, the changed paths as `path (modified)`, `path (added)`, or `path (removed)`, or `unavailable` when one of the samples predates input recording. The same comparison is in `report --json` under `inputChanges` (`available`, `paths`, `changes` with before/after hashes, `truncated`, and the two sample keys). Old ledgers without `inputs` still produce a report; only the changed-input comparison is unavailable until the next sample is recorded.
 
 Stored artifacts live under `.cache-verdict/store/<key>/`. Add `.cache-verdict/` to `.gitignore`; it is measurement state, not source. If a custom ledger lives inside the checkout, add that path too. Moving the declared cache dirs aside is what makes a cold sample genuinely cold. `prune` only removes stored keys, never ledger history.
 
@@ -290,11 +301,13 @@ cache-verdict run --cold
 
 ## How we know it works
 
-`npm test` runs 29 tests. CI runs the suite on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22, then packs the tarball, installs it into a clean project, and runs the installed `cache-verdict` command. The published 0.1.0 tarball was also run end to end with `npx` on a fresh Next.js project outside this repository (numbers above and [validation record](docs/validation/nextjs-0.1.0.md)). The two-build shared-ledger CI pattern was verified with a scripted simulation of two fresh checkouts; its [validation record](docs/validation/ci-ledger-checkout.md) shows the first `check` exiting 3 and the second exiting 0 after the ledger and store were persisted. The end-to-end tests build throwaway projects and assert:
+`npm test` runs 32 tests. CI runs the suite on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22, then packs the tarball, installs it into a clean project, and runs the installed `cache-verdict` command. The published 0.1.0 tarball was also run end to end with `npx` on a fresh Next.js project outside this repository (numbers above and [validation record](docs/validation/nextjs-0.1.0.md)). The two-build shared-ledger CI pattern was verified with a scripted simulation of two fresh checkouts; its [validation record](docs/validation/ci-ledger-checkout.md) shows the first `check` exiting 3 and the second exiting 0 after the ledger and store were persisted. The end-to-end tests build throwaway projects and assert:
 
 - an identical key restores on the second run and reports `cache-pays` with exit 0;
 - a slower warm build reports `cache-costs` with exit 2;
-- changing inputs produce multiple keys and report `cache-churns`;
+- changing inputs produce multiple keys, report `cache-churns`, and name the modified path in text and `--json`;
+- unchanged inputs record identical hashes and report `Changed inputs since previous sample: none`;
+- ledger samples written before input recording still report successfully, and the recorded input list is bounded;
 - a cache that is never restored after two samples reports `cache-never-hits`;
 - an empty `cachePath` reports `cache-unobserved`;
 - `run --cold` records a baseline while still allowing the next normal run to hit;
@@ -337,6 +350,18 @@ There are four causes: `cachePath` is empty, no samples have been recorded, only
 ```sh
 cache-verdict run --cold
 ```
+
+### How do I know which file changed the cache key?
+
+Run `cache-verdict report`; it compares the input hashes in the last two samples and prints the paths that changed, for example:
+
+```console
+Changed inputs since previous sample: src/input.txt (modified)
+Verdict: cache-churns
+Reason: 2 distinct keys across 3 samples; the cache key changes too often to accumulate hits; the last two samples changed src/input.txt (modified)
+```
+
+For machine-readable output, `cache-verdict report --json` puts the same comparison under `inputChanges`: `paths` lists the changed files and `changes` includes each path's before/after hash and whether it was `modified`, `added`, or `removed`. If the last two samples predate input recording, the comparison says so instead of guessing; one more `run` with this version records the hashes.
 
 ### Does `run` replace or delete my real cache directory?
 

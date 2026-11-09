@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `run` records the path and SHA-256 of each declared input in every ledger
+  sample as `inputs`, with `inputCount` and `inputsTruncated`. Recording is
+  bounded to 500 files and roughly 48 KiB per sample so a large input tree
+  cannot bloat the append-only ledger; the cache key still covers every file.
+- `report` and `check` print the paths that changed between the last two
+  samples, and `report --json` exposes the comparison as `inputChanges` with
+  added/modified/removed status and before/after hashes. A `cache-churns`
+  reason and a populated `cache-never-hits` reason now name the changed inputs
+  instead of telling users to compare opaque keys by hand.
+- Ledger samples written before input recording remain readable; the report
+  labels the comparison unavailable instead of failing.
+
 ## [0.2.0] - 2026-11-08
 
 ### Added
