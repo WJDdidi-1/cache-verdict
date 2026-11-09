@@ -232,6 +232,8 @@ cache-verdict init --github-action
 
 With the flag, `init` also writes `.github/workflows/cache-verdict.yml`; without it, only `.cache-verdict.json` is written. If you already have a reviewed config, the flag keeps it and adds only the workflow; `--force` regenerates both. The workflow restores and saves `.ci/cache-verdict/ledger.jsonl` plus `.cache-verdict/store/` with `actions/cache`, runs `cache-verdict run`, then runs `cache-verdict check` and treats exit 3 as "keep collecting". It adds the detected package-manager install step and `setup-python` or `setup-go` when those ecosystems are detected; review the generated install and build steps before committing. `--dry-run --github-action` prints both files without writing, and `--force` replaces an existing workflow.
 
+The [generated-recipe validation record](docs/validation/github-action-recipe.md) writes the workflow from a fixture, checks every required step and cache key, then runs the same `init`, two `run`s, and `check` locally with the workflow's ledger path. `npm test` repeats that sequence so the recipe is exercised rather than only described.
+
 For a Cargo project the generated file is:
 
 ```yaml
@@ -310,7 +312,7 @@ cache-verdict run --cold
 
 ## How we know it works
 
-`npm test` runs 38 tests. CI runs the suite on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22, then packs the tarball, installs it into a clean project, and runs the installed `cache-verdict` command. The published 0.1.0 tarball was also run end to end with `npx` on a fresh Next.js project outside this repository (numbers above and [validation record](docs/validation/nextjs-0.1.0.md)). The two-build shared-ledger CI pattern was verified with a scripted simulation of two fresh checkouts; its [validation record](docs/validation/ci-ledger-checkout.md) shows the first `check` exiting 3 and the second exiting 0 after the ledger and store were persisted. The changed-input explanation was verified with scripted two-run and cold/warm/edit probes; its [validation record](docs/validation/churn-explanation.md) shows the edited path in the text report, the `cache-churns` reason, and `report --json`, with the matching per-file hashes in the ledger. The end-to-end tests build throwaway projects and assert:
+`npm test` runs 39 tests. CI runs the suite on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22, then packs the tarball, installs it into a clean project, and runs the installed `cache-verdict` command. The published 0.1.0 tarball was also run end to end with `npx` on a fresh Next.js project outside this repository (numbers above and [validation record](docs/validation/nextjs-0.1.0.md)). The two-build shared-ledger CI pattern was verified with a scripted simulation of two fresh checkouts; its [validation record](docs/validation/ci-ledger-checkout.md) shows the first `check` exiting 3 and the second exiting 0 after the ledger and store were persisted. The generated GitHub Actions workflow was verified by writing it from a fixture, asserting each step and cache key, and running the same ledger path and command sequence locally; the [recipe validation record](docs/validation/github-action-recipe.md) shows the generated file, both `check` exit codes, and the resulting ledger and store. The changed-input explanation was verified with scripted two-run and cold/warm/edit probes; its [validation record](docs/validation/churn-explanation.md) shows the edited path in the text report, the `cache-churns` reason, and `report --json`, with the matching per-file hashes in the ledger. The end-to-end tests build throwaway projects and assert:
 
 - an identical key restores on the second run and reports `cache-pays` with exit 0;
 - a slower warm build reports `cache-costs` with exit 2;
@@ -324,7 +326,8 @@ cache-verdict run --cold
 - `run` refuses a cachePath that would move the project itself;
 - a custom `--ledger` path receives the samples that `run`, `report`, and `check` read, without writing the default ledger;
 - `CACHE_VERDICT_LEDGER` works between builds and `--ledger` overrides it;
-- `init --github-action` writes a workflow with `actions/cache`, a `cache-verdict run` step, a `cache-verdict check` step, and the persisted ledger path;
+- `init --github-action` writes a workflow with `actions/cache`, package-manager install, a `cache-verdict run` step, a `cache-verdict check` step that accepts exit 3, and the persisted ledger path;
+- the generated workflow is written from a fixture, every required step and cache key is asserted, and the same ledger path and command sequence run locally through one cold sample, `check` exit 3, one warm sample, and `check` exit 0 with `cache-pays`;
 - `init` without the flag writes no workflow, `init --github-action` preserves an existing reviewed config, `--dry-run --github-action` writes neither file, and an existing workflow is only replaced with `--force`;
 - `report --json` and the initial "not enough samples" check behave as documented.
 

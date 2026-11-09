@@ -37,6 +37,24 @@ function runInit(cwd, args = []) {
   }
 }
 
+function runCli(cwd, args, env = process.env) {
+  try {
+    const stdout = execFileSync(process.execPath, [bin, ...args], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env,
+    });
+    return { status: 0, stdout, stderr: '' };
+  } catch (error) {
+    return {
+      status: error.status ?? 1,
+      stdout: typeof error.stdout === 'string' ? error.stdout : '',
+      stderr: typeof error.stderr === 'string' ? error.stderr : '',
+    };
+  }
+}
+
 function readConfig(dir) {
   return JSON.parse(readFileSync(path.join(dir, '.cache-verdict.json'), 'utf8'));
 }
@@ -395,4 +413,119 @@ test('init --github-action keeps an existing reviewed config and adds the workfl
   assert.equal(readFileSync(configPath(dir), 'utf8'), reviewed);
   assert.ok(existsSync(workflowPath(dir)));
   assert.match(result.stdout, /Kept .*\.cache-verdict\.json/);
+});
+
+function workflowStep(workflow, name) {
+  const lines = workflow.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === `- name: ${name}`);
+  assert.notEqual(start, -1, `generated workflow is missing the "${name}" step`);
+  let end = start + 1;
+  while (end < lines.length && !/^\s*- (?:name|uses):/.test(lines[end])) end += 1;
+  return lines.slice(start, end).join('\n');
+}
+
+const CI_RECIPE_BUILD = `
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+const cache = 'node_modules/.cache';
+const warm = existsSync(cache + '/marker');
+if (!warm) {
+  const until = Date.now() + 250;
+  while (Date.now() < until) {}
+}
+mkdirSync(cache, { recursive: true });
+writeFileSync(cache + '/marker', 'artifact');
+writeFileSync(cache + '/payload.bin', 'x'.repeat(2048));
+console.log(warm ? 'warm build: reused the artifact' : 'cold build: computed the artifact');
+`;
+
+test('the generated workflow recipe runs locally: init, two runs, and check', (t) => {
+  const dir = makeProject(t, {
+    'package.json': JSON.stringify({
+      name: 'ci-recipe-fixture',
+      private: true,
+      type: 'module',
+      scripts: { build: 'node build.mjs' },
+    }),
+    'build.mjs': CI_RECIPE_BUILD.trimStart(),
+    'src/input.txt': 'ci recipe input\n',
+  });
+
+  const init = runCli(dir, ['init', '--github-action']);
+  assert.equal(init.status, 0, init.stderr);
+  assert.ok(existsSync(configPath(dir)));
+  assert.equal(readConfig(dir).command, 'npm run build');
+
+  const target = workflowPath(dir);
+  assert.ok(existsSync(target));
+  const workflow = readFileSync(target, 'utf8');
+  const version = JSON.parse(
+    readFileSync(path.join(path.dirname(bin), '..', 'package.json'), 'utf8'),
+  ).version;
+
+  // Every step the recipe depends on is present, including the cache keys that
+  // make actions/cache restore the newest matching entry without reusing an
+  // immutable one.
+  assert.match(workflow, /uses: actions\/checkout@v4/);
+  assert.match(workflow, /uses: actions\/setup-node@v4/);
+  assert.match(workflow, /name: Install project dependencies/);
+  assert.match(workflow, /run: npm install/);
+
+  const cacheStep = workflowStep(workflow, 'Restore the cache-verdict ledger and stored cache');
+  assert.match(cacheStep, /uses: actions\/cache@v4/);
+  assert.match(cacheStep, /\.ci\/cache-verdict\/ledger\.jsonl/);
+  assert.match(cacheStep, /\.cache-verdict\/store/);
+  assert.match(
+    cacheStep,
+    /key: cache-verdict-\$\{\{ github\.ref_name \}\}-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
+  );
+  assert.match(cacheStep, /restore-keys: \|/);
+  assert.match(cacheStep, /cache-verdict-\$\{\{ github\.ref_name \}\}-/);
+
+  const runStep = workflowStep(workflow, 'cache-verdict run');
+  assert.match(runStep, new RegExp(`npx --yes cache-verdict@${version} run`));
+
+  const checkStep = workflowStep(workflow, 'cache-verdict check');
+  assert.match(checkStep, new RegExp(`npx --yes cache-verdict@${version} check`));
+  assert.match(checkStep, /if \[ "\$status" -eq 3 \]/);
+  assert.match(checkStep, /exit 0/);
+
+  const ledgerMatch = /CACHE_VERDICT_LEDGER:\s*(\S+)/.exec(workflow);
+  assert.ok(ledgerMatch, 'the workflow must set CACHE_VERDICT_LEDGER');
+  const ledgerValue = ledgerMatch[1];
+  assert.equal(ledgerValue, '.ci/cache-verdict/ledger.jsonl');
+  const env = { ...process.env, CACHE_VERDICT_LEDGER: ledgerValue };
+
+  // Run the same sequence the gate runs, using the ledger path from the
+  // generated file. The first check is the workflow's "keep collecting" case.
+  const first = runCli(dir, ['run'], env);
+  assert.equal(first.status, 0, first.stderr);
+  assert.match(first.stdout, /MISS \(cold\)/);
+
+  const firstCheck = runCli(dir, ['check'], env);
+  assert.equal(firstCheck.status, 3);
+  assert.match(firstCheck.stderr, /not enough samples/);
+
+  const second = runCli(dir, ['run'], env);
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(second.stdout, /HIT \(warm\)/);
+
+  const secondCheck = runCli(dir, ['check'], env);
+  assert.equal(secondCheck.status, 0, secondCheck.stderr);
+  assert.match(secondCheck.stdout, /Verdict: cache-pays/);
+
+  const ledgerFile = path.join(dir, ...ledgerValue.split('/'));
+  const samples = readFileSync(ledgerFile, 'utf8')
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== '')
+    .map((line) => JSON.parse(line));
+  assert.equal(samples.length, 2);
+  assert.equal(samples[0].cold, true);
+  assert.equal(samples[1].warm, true);
+  assert.equal(samples[0].key, samples[1].key);
+  assert.ok(existsSync(path.join(dir, '.cache-verdict', 'store')));
+  assert.equal(
+    existsSync(path.join(dir, '.cache-verdict', 'ledger.jsonl')),
+    false,
+    'the workflow ledger path should replace the local default',
+  );
 });
