@@ -1,6 +1,6 @@
 # cache-verdict
 
-[![version](https://img.shields.io/badge/version-0.2.0-blue)](https://github.com/WJDdidi-1/cache-verdict/blob/main/CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.3.0-blue)](https://github.com/WJDdidi-1/cache-verdict/blob/main/CHANGELOG.md)
 
 Times build-cache cold vs warm runs and says whether the cache pays.
 
@@ -18,8 +18,8 @@ actions/cache, Swatinem/rust-cache, and gradle/actions/setup-gradle only store a
 
 ## Releases
 
-This tree is version **0.2.0**. Release tags follow `v<version>`, so its tag is
-`v0.2.0`. The [CHANGELOG](https://github.com/WJDdidi-1/cache-verdict/blob/main/CHANGELOG.md)
+This tree is version **0.3.0**. Release tags follow `v<version>`, so its tag is
+`v0.3.0`. The [CHANGELOG](https://github.com/WJDdidi-1/cache-verdict/blob/main/CHANGELOG.md)
 describes what shipped in each version; the
 [v0.1.0 release notes](https://github.com/WJDdidi-1/cache-verdict/blob/main/docs/releases/v0.1.0.md)
 cover the first release.
@@ -38,7 +38,7 @@ Requires Node.js 18 or newer. The package has no runtime dependencies.
 Or run the published version without a global install:
 
 ```sh
-npx cache-verdict@0.2.0 init
+npx cache-verdict@0.3.0 init
 ```
 
 To install the current checkout before a release is on npm:
@@ -52,7 +52,7 @@ To install the exact tarball that CI verifies:
 
 ```sh
 npm pack
-npm install -g ./cache-verdict-0.2.0.tgz
+npm install -g ./cache-verdict-0.3.0.tgz
 ```
 
 The only files `cache-verdict` writes inside a project are `.cache-verdict.json` and the `.cache-verdict/` measurement directory.
@@ -219,7 +219,7 @@ Stored artifacts live under `.cache-verdict/store/<key>/`. Add `.cache-verdict/`
 
 By default every sample is appended to `.cache-verdict/ledger.jsonl`. That works for a job that builds twice, but a CI job that builds once per run starts from a fresh checkout and always sees a single sample, so `check` stays at exit 3. Put the ledger on a path that survives between builds with `--ledger <path>` or `CACHE_VERDICT_LEDGER`, and persist that path. Persist `.cache-verdict/store/` as well: the ledger decides the verdict, and the stored cache is what makes the next build a hit instead of another cold sample.
 
-The `cache-verdict@0.2.0` release includes the explicit ledger path. The two-build pattern was verified end to end with a scripted simulation; the [CI ledger validation record](docs/validation/ci-ledger-checkout.md) has the commands, output, and exit codes.
+The explicit ledger path shipped in `cache-verdict@0.2.0` and remains in `0.3.0`. The two-build pattern was verified end to end with a scripted simulation; the [CI ledger validation record](docs/validation/ci-ledger-checkout.md) has the commands, output, and exit codes.
 
 This GitHub Actions job treats exit 3 as "keep collecting" and gates as soon as the ledger has enough samples. It assumes a reviewed `.cache-verdict.json` is committed to the repository:
 
@@ -253,12 +253,12 @@ jobs:
       - run: npm ci
 
       # The command appends one sample to CACHE_VERDICT_LEDGER.
-      - run: npx --yes cache-verdict@0.2.0 run
+      - run: npx --yes cache-verdict@0.3.0 run
 
       - name: Gate on the accumulated ledger
         run: |
           set +e
-          npx --yes cache-verdict@0.2.0 check
+          npx --yes cache-verdict@0.3.0 check
           status=$?
           set -e
           if [ "$status" -eq 3 ]; then
@@ -397,7 +397,7 @@ rm -rf .cache-verdict/
 
 ## Status
 
-Early MVP, version 0.2.0. The features above are the scope; anything not listed is not built yet.
+Early MVP, version 0.3.0. The features above are the scope; anything not listed is not built yet.
 
 ## License
 
