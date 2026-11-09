@@ -211,7 +211,7 @@ Each sample is one JSON object on its own line in the ledger:
 
 `inputs` is the recorded path and SHA-256 of each declared input file, sorted by path. To keep an append-only ledger bounded, a sample records at most 500 files and roughly 48 KiB of input entries; when the matched input tree is larger, `inputsTruncated` is `true`, `inputCount` is the real number of hashed files, and the cache key still covers all of them.
 
-`report` compares the last two samples and prints a `Changed inputs since previous sample:` line: `none`, the changed paths as `path (modified)`, `path (added)`, or `path (removed)`, or `unavailable` when one of the samples predates input recording. The same comparison is in `report --json` under `inputChanges` (`available`, `paths`, `changes` with before/after hashes, `truncated`, and the two sample keys). Old ledgers without `inputs` still produce a report; only the changed-input comparison is unavailable until the next sample is recorded.
+`report` compares the last two samples and prints a `Changed inputs since previous sample:` line: `none`, the changed paths as `path (modified)`, `path (added)`, or `path (removed)`, or `unavailable` when one of the samples predates input recording. The same comparison is in `report --json` under `inputChanges` (`available`, `paths`, `changes` with before/after hashes, `truncated`, and the two sample keys). Old ledgers without `inputs` still produce a report; only the changed-input comparison is unavailable until the next sample is recorded. A [scripted probe](docs/validation/churn-explanation.md) shows the changed path in both the `cache-churns` reason and a two-run `cache-never-hits` reason.
 
 Stored artifacts live under `.cache-verdict/store/<key>/`. Add `.cache-verdict/` to `.gitignore`; it is measurement state, not source. If a custom ledger lives inside the checkout, add that path too. Moving the declared cache dirs aside is what makes a cold sample genuinely cold. `prune` only removes stored keys, never ledger history.
 
@@ -301,7 +301,7 @@ cache-verdict run --cold
 
 ## How we know it works
 
-`npm test` runs 32 tests. CI runs the suite on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22, then packs the tarball, installs it into a clean project, and runs the installed `cache-verdict` command. The published 0.1.0 tarball was also run end to end with `npx` on a fresh Next.js project outside this repository (numbers above and [validation record](docs/validation/nextjs-0.1.0.md)). The two-build shared-ledger CI pattern was verified with a scripted simulation of two fresh checkouts; its [validation record](docs/validation/ci-ledger-checkout.md) shows the first `check` exiting 3 and the second exiting 0 after the ledger and store were persisted. The end-to-end tests build throwaway projects and assert:
+`npm test` runs 32 tests. CI runs the suite on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22, then packs the tarball, installs it into a clean project, and runs the installed `cache-verdict` command. The published 0.1.0 tarball was also run end to end with `npx` on a fresh Next.js project outside this repository (numbers above and [validation record](docs/validation/nextjs-0.1.0.md)). The two-build shared-ledger CI pattern was verified with a scripted simulation of two fresh checkouts; its [validation record](docs/validation/ci-ledger-checkout.md) shows the first `check` exiting 3 and the second exiting 0 after the ledger and store were persisted. The changed-input explanation was verified with scripted two-run and cold/warm/edit probes; its [validation record](docs/validation/churn-explanation.md) shows the edited path in the text report, the `cache-churns` reason, and `report --json`, with the matching per-file hashes in the ledger. The end-to-end tests build throwaway projects and assert:
 
 - an identical key restores on the second run and reports `cache-pays` with exit 0;
 - a slower warm build reports `cache-costs` with exit 2;
@@ -361,7 +361,7 @@ Verdict: cache-churns
 Reason: 2 distinct keys across 3 samples; the cache key changes too often to accumulate hits; the last two samples changed src/input.txt (modified)
 ```
 
-For machine-readable output, `cache-verdict report --json` puts the same comparison under `inputChanges`: `paths` lists the changed files and `changes` includes each path's before/after hash and whether it was `modified`, `added`, or `removed`. If the last two samples predate input recording, the comparison says so instead of guessing; one more `run` with this version records the hashes.
+For machine-readable output, `cache-verdict report --json` puts the same comparison under `inputChanges`: `paths` lists the changed files and `changes` includes each path's before/after hash and whether it was `modified`, `added`, or `removed`. If the last two samples predate input recording, the comparison says so instead of guessing; one more `run` with this version records the hashes. The [churn explanation validation record](docs/validation/churn-explanation.md) shows a two-run probe with one edited input and a cold/warm/edit probe, with the commands, output, and matching ledger hashes.
 
 ### Does `run` replace or delete my real cache directory?
 
