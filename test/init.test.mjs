@@ -292,3 +292,107 @@ test('init rejects an unknown --ecosystem without writing a config', (t) => {
   assert.match(result.stderr, /unsupported ecosystem/);
   assert.equal(existsSync(configPath(dir)), false);
 });
+
+function workflowPath(dir) {
+  return path.join(dir, '.github', 'workflows', 'cache-verdict.yml');
+}
+
+test('init --github-action writes a workflow that persists and gates on the ledger', (t) => {
+  const dir = makeProject(t, {
+    'Cargo.toml': '[package]\nname = "demo"\nversion = "0.1.0"\n',
+  });
+
+  const result = runInit(dir, ['--github-action']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(existsSync(configPath(dir)), 'the config should still be written');
+
+  const workflow = readFileSync(workflowPath(dir), 'utf8');
+  assert.match(workflow, /uses: actions\/cache@v4/);
+  assert.match(workflow, /CACHE_VERDICT_LEDGER: \.ci\/cache-verdict\/ledger\.jsonl/);
+  assert.match(workflow, /\.ci\/cache-verdict\/ledger\.jsonl/);
+  assert.match(workflow, /\.cache-verdict\/store/);
+  assert.match(workflow, /name: cache-verdict run/);
+  assert.match(workflow, /npx --yes cache-verdict@\d+\.\d+\.\d+ run/);
+  assert.match(workflow, /name: cache-verdict check/);
+  assert.match(workflow, /npx --yes cache-verdict@\d+\.\d+\.\d+ check/);
+  assert.match(workflow, /if \[ "\$status" -eq 3 \]/);
+  assert.match(result.stdout, /cache-verdict\.yml/);
+});
+
+test('init without --github-action writes no workflow', (t) => {
+  const dir = makeProject(t, {
+    'Cargo.toml': '[package]\nname = "demo"\n',
+  });
+
+  const result = runInit(dir);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(existsSync(configPath(dir)));
+  assert.equal(existsSync(workflowPath(dir)), false);
+});
+
+test('init --github-action adds the detected package manager install step', (t) => {
+  const dir = makeProject(t, {
+    'package.json': JSON.stringify({
+      name: 'site',
+      scripts: { build: 'next build' },
+      dependencies: { next: '15.0.0' },
+    }),
+    'package-lock.json': '{"lockfileVersion":3}\n',
+    'app/page.tsx': 'export default function Page() { return null; }\n',
+  });
+
+  const result = runInit(dir, ['--github-action']);
+  assert.equal(result.status, 0, result.stderr);
+
+  const workflow = readFileSync(workflowPath(dir), 'utf8');
+  assert.match(workflow, /name: Install project dependencies/);
+  assert.match(workflow, /run: npm ci/);
+  assert.match(workflow, /uses: actions\/setup-node@v4/);
+});
+
+test('init --github-action refuses to overwrite a workflow without --force', (t) => {
+  const dir = makeProject(t, {
+    'Cargo.toml': '[package]\nname = "demo"\n',
+  });
+  const target = workflowPath(dir);
+  mkdirSync(path.dirname(target), { recursive: true });
+  const original = '# reviewed workflow\n';
+  writeFileSync(target, original);
+
+  const refused = runInit(dir, ['--github-action']);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /--force/);
+  assert.equal(readFileSync(target, 'utf8'), original);
+  assert.equal(existsSync(configPath(dir)), false, 'a refused run must not write the config');
+
+  const forced = runInit(dir, ['--github-action', '--force']);
+  assert.equal(forced.status, 0, forced.stderr);
+  assert.match(readFileSync(target, 'utf8'), /actions\/cache@v4/);
+});
+
+test('init --github-action --dry-run prints both files and writes neither', (t) => {
+  const dir = makeProject(t, {
+    'Cargo.toml': '[package]\nname = "demo"\n',
+  });
+
+  const result = runInit(dir, ['--github-action', '--dry-run']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(configPath(dir)), false);
+  assert.equal(existsSync(workflowPath(dir)), false);
+  assert.match(result.stdout, /"ecosystem": "cargo"/);
+  assert.match(result.stdout, /actions\/cache@v4/);
+});
+
+test('init --github-action keeps an existing reviewed config and adds the workflow', (t) => {
+  const dir = makeProject(t, {
+    'Cargo.toml': '[package]\nname = "demo"\n',
+  });
+  assert.equal(runInit(dir).status, 0);
+  const reviewed = readFileSync(configPath(dir), 'utf8');
+
+  const result = runInit(dir, ['--github-action']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(configPath(dir), 'utf8'), reviewed);
+  assert.ok(existsSync(workflowPath(dir)));
+  assert.match(result.stdout, /Kept .*\.cache-verdict\.json/);
+});

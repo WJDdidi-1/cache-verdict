@@ -9,7 +9,9 @@ import {
 } from '../lib/detect.mjs';
 import {
   CONFIG_FILENAME,
+  assertConfigWritable,
   buildConfig,
+  configExists,
   loadConfig,
   serializeConfig,
   writeConfig,
@@ -17,6 +19,12 @@ import {
 import { ledgerPath, pruneStore, readLedger, storeStats } from '../lib/ledger.mjs';
 import { analyzeSamples, formatReport } from '../lib/report.mjs';
 import { formatRunSummary, runSample } from '../lib/run.mjs';
+import {
+  WORKFLOW_PATH,
+  assertWorkflowWritable,
+  renderGithubWorkflow,
+  writeWorkflow,
+} from '../lib/workflow.mjs';
 
 const VERSION = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
@@ -50,8 +58,12 @@ Init options:
   -e, --ecosystem <id>  Use this detector when several build systems match.
                         One of: ${supportedEcosystemIds().join(', ')}
       --command <cmd>   Override the detected build command.
-  -f, --force           Overwrite an existing .cache-verdict.json.
-      --dry-run         Print the config to stdout instead of writing it.
+      --github-action   Also write ${WORKFLOW_PATH}: a workflow that restores
+                        the ledger and stored cache with actions/cache, runs
+                        cache-verdict run, and gates on cache-verdict check.
+  -f, --force           Overwrite an existing .cache-verdict.json or workflow.
+      --dry-run         Print the config (and generated workflow) to stdout
+                        instead of writing either file.
   -h, --help            Show this help.
 
 Run options:
@@ -84,10 +96,14 @@ key. Add .cache-verdict/ to .gitignore. To carry samples between CI builds, put
 the ledger on a persisted path with --ledger or CACHE_VERDICT_LEDGER; keep
 store/ too so later builds can still restore a cache for the same key.
 
+init --github-action writes .github/workflows/cache-verdict.yml next to the
+config. The workflow restores and saves the ledger plus store/ with
+actions/cache, appends a sample with run, and gates with check.
+
 Exit codes:
   0  success; check found that the cache pays
-  1  no matching build system, unreadable directory, existing config, or a
-     failed build command
+  1  no matching build system, unreadable directory, existing config or
+     workflow, or a failed build command
   2  invalid command-line usage; check found a losing, churning, unobserved,
      or never-hitting cache
   3  check needs more runs before it can decide
@@ -114,6 +130,7 @@ function parseInitOptions(args) {
     dir: '.',
     force: false,
     dryRun: false,
+    githubAction: false,
     ecosystem: null,
     command: undefined,
     help: false,
@@ -129,6 +146,8 @@ function parseInitOptions(args) {
       options.force = true;
     } else if (argument === '--dry-run') {
       options.dryRun = true;
+    } else if (argument === '--github-action') {
+      options.githubAction = true;
     } else if (argument === '--ecosystem' || argument === '-e') {
       const value = args[index + 1];
       if (value === undefined || value.startsWith('-')) {
@@ -269,17 +288,52 @@ function init(args) {
   const directory = resolveDirectory(options.dir);
   const detection = detectProject(directory, { ecosystem: options.ecosystem });
   const config = buildConfig(detection, options.command === undefined ? {} : { command: options.command });
+  const hasConfig = configExists(directory);
+  // Adding a workflow to an existing project must not require --force: that
+  // would replace the reviewed config as a side effect.
+  const keepConfig =
+    options.githubAction === true && hasConfig && options.force !== true && options.dryRun !== true;
+  const workflow =
+    options.githubAction === true
+      ? renderGithubWorkflow(directory, detection, {
+          version: VERSION,
+          command: keepConfig ? loadConfig(directory).command : config.command,
+        })
+      : null;
 
   if (options.dryRun) {
     process.stdout.write(serializeConfig(config));
+    if (workflow !== null) {
+      process.stdout.write(`\n# ${WORKFLOW_PATH}\n`);
+      process.stdout.write(workflow);
+    }
     return 0;
   }
 
-  const target = writeConfig(directory, config, { force: options.force });
+  if (workflow !== null) {
+    // Check both targets before writing either, so a refused overwrite cannot
+    // leave a half-applied init behind.
+    if (!keepConfig) assertConfigWritable(directory, { force: options.force });
+    assertWorkflowWritable(directory, { force: options.force });
+  }
+
+  const target = keepConfig
+    ? path.join(directory, CONFIG_FILENAME)
+    : writeConfig(directory, config, { force: options.force });
   const shown = path.relative(process.cwd(), target) || CONFIG_FILENAME;
 
   console.log(`Detected ${detection.displayName} from ${detection.detectedFrom.join(', ')}.`);
-  console.log(`Wrote ${shown}.`);
+  console.log(`${keepConfig ? 'Kept' : 'Wrote'} ${shown}.`);
+
+  if (workflow !== null) {
+    const writtenWorkflow = writeWorkflow(directory, workflow, { force: options.force });
+    const shownWorkflow = path.relative(process.cwd(), writtenWorkflow) || WORKFLOW_PATH;
+    console.log(`Wrote ${shownWorkflow}.`);
+    console.log(
+      'Review the install step, then commit the config and workflow so CI restores the same ledger.',
+    );
+  }
+
   if (detection.alternatives.length > 0) {
     const alternatives = detection.alternatives.map((item) => item.ecosystem).join(', ');
     console.log(`Also detected: ${alternatives}. Use --ecosystem to choose one instead.`);
