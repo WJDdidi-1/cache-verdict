@@ -19,6 +19,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instead of telling users to compare opaque keys by hand.
 - Ledger samples written before input recording remain readable; the report
   labels the comparison unavailable instead of failing.
+- The changed-input explanation is verified end to end by a scripted probe: a
+  two-run probe with one edited input names the path under `cache-never-hits`,
+  and a cold/warm/edit sequence names it under `cache-churns`. The commands,
+  output, and matching ledger hashes are recorded in
+  `docs/validation/churn-explanation.md`.
 
 ## [0.2.0] - 2026-11-08
 
