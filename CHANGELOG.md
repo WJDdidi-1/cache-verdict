@@ -6,6 +6,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-10
+
+### Added
+
+- `init --github-action` writes `.github/workflows/cache-verdict.yml` as well as
+  the config, so CI adoption is one command instead of a hand-written recipe.
+  The generated workflow restores and saves the ledger and stored cache with
+  `actions/cache`, runs a sample, and gates on `check`, treating exit 3 as
+  "keep collecting". It adds the detected package-manager install step and
+  `setup-python` or `setup-go` when those ecosystems are detected.
+- `init --github-action` keeps an existing reviewed config and adds only the
+  workflow. `--dry-run --github-action` prints both files without writing
+  either, and `--force` replaces an existing workflow or config.
+- The generated recipe is verified end to end: a fixture assertion covers every
+  required step and cache key, then the same `init`, two `run`s, and `check`
+  sequence runs locally with the workflow's ledger path. The commands, output,
+  and exit codes are recorded in `docs/validation/github-action-recipe.md`.
+
+### Changed
+
+- `init --help` and the README document the new flag, the files it writes, and
+  how a reviewed config is preserved.
+
 ## [0.3.0] - 2026-11-09
 
 ### Added
@@ -66,6 +89,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `prune --keep N` for least-recently-used stored key eviction and `run --cold`
   for a fresh baseline sample.
 
+[0.4.0]: https://github.com/WJDdidi-1/cache-verdict/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/WJDdidi-1/cache-verdict/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/WJDdidi-1/cache-verdict/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/WJDdidi-1/cache-verdict/releases/tag/v0.1.0
