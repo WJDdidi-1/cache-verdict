@@ -6,9 +6,35 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `check` enforces an optional savings policy from `.cache-verdict.json`:
+  `policy.minNetMsPerHit` fails when the measured net saving per hit is below
+  the value, and `policy.maxRestoreMs` fails when the median restore cost is
+  above it. A missed threshold exits 4 and prints the measured value, the
+  limit, and the shortfall; the verdict is still reported so a cache that pays
+  but misses the team's bar is visible as both `cache-pays` and a policy
+  failure. A config with no policy keeps the historical 0, 2, and 3
+  verdict-only exit codes.
+- `check --min-net-ms <ms>` and `check --max-restore-ms <ms>` override one
+  config threshold for a single invocation without rewriting the config. Both
+  accept the `--flag value` and `--flag=value` forms, and the remaining config
+  threshold stays in effect.
+- `check --json` and `report --json` expose the effective `policy` and the
+  `policyFailures` list, including each failure's threshold, measured value,
+  limit, and shortfall.
+
 ### Documentation
 
-- Recorded that `check` has no savings policy in 0.4.0: `check --help` exposes
+- The README documents the optional `policy` block, both command-line
+  overrides, the JSON fields, and the full exit-code table including exit 4.
+- The policy was verified from a clean `npm pack` + install: the installed CLI
+  exits 4 with the shortfall for a strict policy, and exits 0 for a permissive
+  policy and a `--min-net-ms` override. The commands, tarball hash, output, and
+  exit codes are in [the savings-policy validation record](docs/validation/savings-policy.md);
+  `test/policy-install.test.mjs` repeats the check deterministically against
+  the packed artifact.
+- Recorded that `check` had no savings policy in 0.4.0: `check --help` exposes
   no threshold flag, a freshly initialised `.cache-verdict.json` has no policy
   field, and a measured 30.4 ms net saving per hit still produces
   `cache-pays` and exit `0`. The [0.4.0 policy validation record](docs/validation/policy-0.4.0.md)
