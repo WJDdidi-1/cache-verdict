@@ -1,6 +1,6 @@
 # cache-verdict
 
-[![version](https://img.shields.io/badge/version-0.4.0-blue)](https://github.com/WJDdidi-1/cache-verdict/blob/main/CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-0.5.0-blue)](https://github.com/WJDdidi-1/cache-verdict/blob/main/CHANGELOG.md)
 
 Times build-cache cold vs warm runs and says whether the cache pays.
 
@@ -18,10 +18,8 @@ actions/cache, Swatinem/rust-cache, and gradle/actions/setup-gradle only store a
 
 ## Releases
 
-The latest published release is **0.4.0**. The savings policy described below
-is merged in this tree but is not in the 0.4.0 tarball yet; it will ship in the
-next release. Release tags follow `v<version>`. The
-[CHANGELOG](https://github.com/WJDdidi-1/cache-verdict/blob/main/CHANGELOG.md)
+This tree is version **0.5.0**. Release tags follow `v<version>`, so its tag is
+`v0.5.0`. The [CHANGELOG](https://github.com/WJDdidi-1/cache-verdict/blob/main/CHANGELOG.md)
 describes what shipped in each version; the
 [v0.1.0 release notes](https://github.com/WJDdidi-1/cache-verdict/blob/main/docs/releases/v0.1.0.md)
 cover the first release.
@@ -40,7 +38,7 @@ Requires Node.js 18 or newer. The package has no runtime dependencies.
 Or run the published version without a global install:
 
 ```sh
-npx cache-verdict@0.4.0 init
+npx cache-verdict@0.5.0 init
 ```
 
 To install the current checkout before a release is on npm:
@@ -54,7 +52,7 @@ To install the exact tarball that CI verifies:
 
 ```sh
 npm pack
-npm install -g ./cache-verdict-0.4.0.tgz
+npm install -g ./cache-verdict-0.5.0.tgz
 ```
 
 The only files `cache-verdict` writes inside a project are `.cache-verdict.json` and the `.cache-verdict/` measurement directory, plus `.github/workflows/cache-verdict.yml` when `init --github-action` is used.
@@ -321,7 +319,7 @@ Stored artifacts live under `.cache-verdict/store/<key>/`. Add `.cache-verdict/`
 
 By default every sample is appended to `.cache-verdict/ledger.jsonl`. That works for a job that builds twice, but a CI job that builds once per run starts from a fresh checkout and always sees a single sample, so `check` stays at exit 3. Put the ledger on a path that survives between builds with `--ledger <path>` or `CACHE_VERDICT_LEDGER`, and persist that path. Persist `.cache-verdict/store/` as well: the ledger decides the verdict, and the stored cache is what makes the next build a hit instead of another cold sample.
 
-The explicit ledger path shipped in `cache-verdict@0.2.0` and remains in `0.4.0`. The two-build pattern was verified end to end with a scripted simulation; the [CI ledger validation record](docs/validation/ci-ledger-checkout.md) has the commands, output, and exit codes.
+The explicit ledger path shipped in `cache-verdict@0.2.0` and remains in `0.5.0`. The two-build pattern was verified end to end with a scripted simulation; the [CI ledger validation record](docs/validation/ci-ledger-checkout.md) has the commands, output, and exit codes.
 
 Generate the CI recipe instead of translating this section into YAML by hand:
 
@@ -372,12 +370,12 @@ jobs:
             cache-verdict-${{ github.ref_name }}-
 
       - name: cache-verdict run
-        run: npx --yes cache-verdict@0.4.0 run
+        run: npx --yes cache-verdict@0.5.0 run
 
       - name: cache-verdict check
         run: |
           set +e
-          npx --yes cache-verdict@0.4.0 check
+          npx --yes cache-verdict@0.5.0 check
           status=$?
           set -e
           if [ "$status" -eq 3 ]; then
@@ -405,9 +403,8 @@ cache-verdict check
 - exits 4 when a configured `--min-net-ms`, `--max-restore-ms`, or `policy` threshold is missed.
 
 The generated workflow already propagates every non-zero `check` exit except 3,
-so once the policy version is published a policy failure fails the job without
-any extra YAML. Set the policy in `.cache-verdict.json` and commit it with the
-workflow.
+so a policy failure fails the job without any extra YAML. Set the policy in
+`.cache-verdict.json` and commit it with the workflow.
 
 To add a fresh cold baseline in a pipeline without losing the stored cache that the next run should hit:
 
@@ -543,9 +540,8 @@ rm -rf .cache-verdict/
 
 ## Status
 
-Early MVP. The latest published release is 0.4.0; the savings policy is merged
-and unreleased. The features above are the scope; anything not listed is not
-built yet.
+Early MVP, version 0.5.0. The features above are the scope; anything not listed
+is not built yet.
 
 ## License
 
