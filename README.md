@@ -18,8 +18,10 @@ actions/cache, Swatinem/rust-cache, and gradle/actions/setup-gradle only store a
 
 ## Releases
 
-This tree is version **0.4.0**. Release tags follow `v<version>`, so its tag is
-`v0.4.0`. The [CHANGELOG](https://github.com/WJDdidi-1/cache-verdict/blob/main/CHANGELOG.md)
+The latest published release is **0.4.0**. The savings policy described below
+is merged in this tree but is not in the 0.4.0 tarball yet; it will ship in the
+next release. Release tags follow `v<version>`. The
+[CHANGELOG](https://github.com/WJDdidi-1/cache-verdict/blob/main/CHANGELOG.md)
 describes what shipped in each version; the
 [v0.1.0 release notes](https://github.com/WJDdidi-1/cache-verdict/blob/main/docs/releases/v0.1.0.md)
 cover the first release.
@@ -69,12 +71,18 @@ cache-verdict init --github-action
 # Read command, inputs, and cachePath; edit anything that looks wrong.
 cat .cache-verdict.json
 
+# Optional: make check fail unless the cache saves enough. Add a policy
+# object such as {"minNetMsPerHit": 50} to .cache-verdict.json.
+
 # Take a cold sample, then a warm sample using the stored cache.
 cache-verdict run
 cache-verdict run
 
 # See the numbers and one verdict.
 cache-verdict report
+
+# Gate on the verdict and on the policy, if one is configured.
+cache-verdict check
 ```
 
 `init` understands Cargo, Gradle, Next.js, npm (including pnpm, Yarn, and Bun lockfiles), Python, and Go. When several build systems match, pass `--ecosystem` to choose one. `init` never overwrites a reviewed config or workflow without `--force`. Add `--github-action` to write `.github/workflows/cache-verdict.yml`, or combine it with `--dry-run` to preview both files first.
@@ -140,14 +148,14 @@ $ npx --yes cache-verdict@0.1.0 check >/dev/null; echo $?
 
 The warm run restored 46,735,665 bytes of cache in 14.6 ms and was 2397.1 ms faster end to end, so `check` exited 0. Those are two samples on one machine, not a benchmark; run the same commands on your project before deciding. The [validation record](docs/validation/nextjs-0.1.0.md) has the artifact hash, environment, exact config, ledger rows, and the paths this run did not cover.
 
-`check` exits 0 for `cache-pays`, 2 for `cache-costs`, `cache-churns`, `cache-never-hits`, or `cache-unobserved`, and 3 before there are enough samples to decide.
+`check` exits 0 for `cache-pays`, 2 for `cache-costs`, `cache-churns`, `cache-never-hits`, or `cache-unobserved`, and 3 before there are enough samples to decide. With a savings policy it also exits 4 when the measured saving or restore cost misses a threshold; see [Savings policy](#savings-policy).
 
 ## What the MVP does
 
 - `cache-verdict init` detects Cargo, Gradle, Next.js, npm, Python, or Go and writes a reviewable `.cache-verdict.json`; `init --github-action` also writes a GitHub Actions workflow that persists the ledger and stored cache.
 - `cache-verdict run` content-addresses the declared inputs, moves declared cache dirs aside, restores the stored cache for that exact key when it exists, times the build from that known state, stores the produced artifacts, and appends one sample to `.cache-verdict/ledger.jsonl` (or the `--ledger` / `CACHE_VERDICT_LEDGER` path). The sample records the path and SHA-256 of each declared input, bounded so a huge input tree cannot bloat the ledger.
 - `cache-verdict report` prints hit rate, median cold vs warm totals, restore cost, net ms per hit, cache size, the paths that changed since the previous sample, and one verdict: `cache-pays`, `cache-costs`, `cache-churns`, `cache-never-hits`, or `cache-unobserved`.
-- `cache-verdict check` exits 2 on a losing, churning, or unobserved cache and 3 when more runs are needed, so CI can gate on the verdict.
+- `cache-verdict check` exits 2 on a losing, churning, or unobserved cache and 3 when more runs are needed, so CI can gate on the verdict. It also enforces an optional savings policy and exits 4 when a configured minimum saving or maximum restore cost is missed.
 - `cache-verdict prune --keep N` evicts least-recently-used stored keys; `run --cold` adds a baseline sample without wedging the next hit.
 
 ## The config
@@ -162,13 +170,104 @@ The warm run restored 46,735,665 bytes of cache in 14.6 ms and was 2397.1 ms fas
   "command": "cargo build",
   "inputs": ["Cargo.toml", "Cargo.lock", "src/**"],
   "cachePath": ["target"],
-  "detectedFrom": ["Cargo.toml"]
+  "detectedFrom": ["Cargo.toml"],
+  "policy": {
+    "minNetMsPerHit": 50,
+    "maxRestoreMs": 30
+  }
 }
 ```
+
+`init` does not write a `policy` object; add one by hand when the project needs
+to gate on savings rather than only on the verdict.
 
 - `command` is the real build to time. It runs through the platform shell from the project directory.
 - `inputs` are paths or globs. Their contents, the command, and the declared cache paths are hashed into the cache key. A key never silently reuses a cache measured for a different command. Each sample also records the path and SHA-256 of every matched input, so `report` can tell you which file changed the key.
 - `cachePath` is what cache-verdict moves aside, restores, sizes, and stores. It may be a directory, a file, a glob such as `**/__pycache__`, or an environment-expanded path such as `$GOCACHE`. An empty list is reported as `cache-unobserved`.
+- `policy` is optional. `minNetMsPerHit` fails `check` when the measured net saving per hit is below it; `maxRestoreMs` fails it when the median restore time is above it. Both must be non-negative numbers, and either may be omitted. See [Savings policy](#savings-policy).
+
+## Savings policy
+
+A `cache-pays` verdict only says the warm build is faster than cold. A team can
+require more than that — for example, at least 50 ms saved per hit. Add a
+top-level `policy` object to `.cache-verdict.json`:
+
+```json
+{
+  "schemaVersion": 1,
+  "ecosystem": "cargo",
+  "displayName": "Cargo",
+  "command": "cargo build",
+  "inputs": ["Cargo.toml", "Cargo.lock", "src/**"],
+  "cachePath": ["target"],
+  "detectedFrom": ["Cargo.toml"],
+  "policy": {
+    "minNetMsPerHit": 50,
+    "maxRestoreMs": 30
+  }
+}
+```
+
+Both thresholds are optional:
+
+| Field | Fails `check` when |
+| --- | --- |
+| `minNetMsPerHit` | `Net ms per hit` is below the value. |
+| `maxRestoreMs` | The median `Restore cost` is above the value. |
+
+A missing or empty `policy` keeps the historical verdict-only behavior. A
+threshold with no usable measurement is skipped, not treated as a pass or a
+failure; `check` still exits 3 first when it needs more samples. Policy values
+must be non-negative finite numbers, and a malformed policy is a config error
+(exit 1), not a silent pass.
+
+Override a threshold for one invocation with `--min-net-ms` or
+`--max-restore-ms`:
+
+```sh
+cache-verdict check                              # config policy only
+cache-verdict check --min-net-ms 50              # override the minimum saving
+cache-verdict check --min-net-ms 75 --max-restore-ms 20
+cache-verdict check --min-net-ms 50 --json       # policy and failures in JSON
+```
+
+Each flag replaces that one threshold for that run; the other config threshold
+stays in effect. The override is not written back to `.cache-verdict.json`.
+
+When a threshold is missed, `check` prints the measured value, the limit, and
+the shortfall in the report and again on stderr, then exits 4. The verdict is
+still reported, so a cache that pays but misses the team's bar is visible as
+both `Verdict: cache-pays` and a policy failure:
+
+```console
+$ cache-verdict check
+...
+Net ms per hit: 30.4 ms
+Policy: min net 50.0 ms per hit
+Policy failure: policy.minNetMsPerHit missed: measured 30.4 ms saved per hit, needs at least 50.0 ms (shortfall 19.6 ms)
+Verdict: cache-pays
+Reason: warm builds are 30.4 ms faster per hit after paying the restore cost
+cache-verdict: policy.minNetMsPerHit missed: measured 30.4 ms saved per hit, needs at least 50.0 ms (shortfall 19.6 ms)
+```
+
+`check --json` and `report --json` include `policy` (the effective thresholds,
+with `null` for an unset one) and `policyFailures` (each failure's `threshold`,
+`measured`, `limit`, `shortfall`, and `message`).
+
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success. `check` found `cache-pays` and every configured policy threshold passed. |
+| 1 | No matching build system, unreadable directory, existing config or workflow, failed build command, or invalid config (including a malformed policy). |
+| 2 | Invalid command-line usage, or `check` found `cache-costs`, `cache-churns`, `cache-never-hits`, or `cache-unobserved`. |
+| 3 | `check` needs more samples before it can decide; policy failures are not evaluated yet. |
+| 4 | `check` missed a threshold in the configured savings policy (`--min-net-ms`, `--max-restore-ms`, or `policy`). |
+
+The policy is checked from the same medians the report prints, after the
+samples needed for a verdict exist. It does not override a losing verdict:
+`cache-costs` still exits 2 unless a policy threshold also fails, in which case
+the policy failure is reported and `check` exits 4.
 
 ## What the verdicts mean
 
@@ -300,9 +399,15 @@ cache-verdict check
 
 `check` prints the same report as `report` and then:
 
-- exits 0 for `cache-pays`,
+- exits 0 for `cache-pays` when every configured policy threshold passes,
 - exits 2 for `cache-costs`, `cache-churns`, `cache-never-hits`, or `cache-unobserved`,
-- exits 3 when more samples are needed before a verdict is possible.
+- exits 3 when more samples are needed before a verdict is possible,
+- exits 4 when a configured `--min-net-ms`, `--max-restore-ms`, or `policy` threshold is missed.
+
+The generated workflow already propagates every non-zero `check` exit except 3,
+so once the policy version is published a policy failure fails the job without
+any extra YAML. Set the policy in `.cache-verdict.json` and commit it with the
+workflow.
 
 To add a fresh cold baseline in a pipeline without losing the stored cache that the next run should hit:
 
@@ -312,7 +417,7 @@ cache-verdict run --cold
 
 ## How we know it works
 
-`npm test` runs 39 tests. CI runs the suite on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22, then packs the tarball, installs it into a clean project, and runs the installed `cache-verdict` command. The published 0.1.0 tarball was also run end to end with `npx` on a fresh Next.js project outside this repository (numbers above and [validation record](docs/validation/nextjs-0.1.0.md)). The two-build shared-ledger CI pattern was verified with a scripted simulation of two fresh checkouts; its [validation record](docs/validation/ci-ledger-checkout.md) shows the first `check` exiting 3 and the second exiting 0 after the ledger and store were persisted. The generated GitHub Actions workflow was verified by writing it from a fixture, asserting each step and cache key, and running the same ledger path and command sequence locally; the [recipe validation record](docs/validation/github-action-recipe.md) shows the generated file, both `check` exit codes, and the resulting ledger and store. The changed-input explanation was verified with scripted two-run and cold/warm/edit probes; its [validation record](docs/validation/churn-explanation.md) shows the edited path in the text report, the `cache-churns` reason, and `report --json`, with the matching per-file hashes in the ledger. The end-to-end tests build throwaway projects and assert:
+`npm test` runs the full suite. CI runs it on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22, then packs the tarball, installs it into a clean project, and runs the installed `cache-verdict` command. The published 0.1.0 tarball was also run end to end with `npx` on a fresh Next.js project outside this repository (numbers above and [validation record](docs/validation/nextjs-0.1.0.md)). The two-build shared-ledger CI pattern was verified with a scripted simulation of two fresh checkouts; its [validation record](docs/validation/ci-ledger-checkout.md) shows the first `check` exiting 3 and the second exiting 0 after the ledger and store were persisted. The generated GitHub Actions workflow was verified by writing it from a fixture, asserting each step and cache key, and running the same ledger path and command sequence locally; the [recipe validation record](docs/validation/github-action-recipe.md) shows the generated file, both `check` exit codes, and the resulting ledger and store. The changed-input explanation was verified with scripted two-run and cold/warm/edit probes; its [validation record](docs/validation/churn-explanation.md) shows the edited path in the text report, the `cache-churns` reason, and `report --json`, with the matching per-file hashes in the ledger. The savings policy was verified through a clean `npm pack` + install: the installed CLI exits 4 with the measured value, limit, and shortfall for a strict policy, and exits 0 for a permissive policy or a `--min-net-ms` override; the [savings-policy validation record](docs/validation/savings-policy.md) has the tarball hash, commands, output, and exit codes. The end-to-end tests build throwaway projects and assert:
 
 - an identical key restores on the second run and reports `cache-pays` with exit 0;
 - a slower warm build reports `cache-costs` with exit 2;
@@ -328,6 +433,9 @@ cache-verdict run --cold
 - `CACHE_VERDICT_LEDGER` works between builds and `--ledger` overrides it;
 - `init --github-action` writes a workflow with `actions/cache`, package-manager install, a `cache-verdict run` step, a `cache-verdict check` step that accepts exit 3, and the persisted ledger path;
 - the generated workflow is written from a fixture, every required step and cache key is asserted, and the same ledger path and command sequence run locally through one cold sample, `check` exit 3, one warm sample, and `check` exit 0 with `cache-pays`;
+- `check` passes a configured policy, exits 4 with the threshold name, measured value, limit, and shortfall when `minNetMsPerHit` or `maxRestoreMs` is missed, and still returns the verdict-only 0, 2, and 3 codes when no policy is set;
+- `--min-net-ms` and `--max-restore-ms` override the config policy per threshold, both flag forms work, and an invalid or malformed threshold is rejected;
+- a clean `npm pack` + install exposes the policy flags, exits 4 with the shortfall for a strict policy, and exits 0 for a permissive policy and a command-line override;
 - `init` without the flag writes no workflow, `init --github-action` preserves an existing reviewed config, `--dry-run --github-action` writes neither file, and an existing workflow is only replaced with `--force`;
 - `report --json` and the initial "not enough samples" check behave as documented.
 
@@ -356,6 +464,30 @@ One cold sample and one warm sample. The first `run` misses and stores the cache
 ```sh
 cache-verdict run && cache-verdict run && cache-verdict check
 ```
+
+### Can I require a minimum saving before CI passes?
+
+Yes. Add a `policy` object to `.cache-verdict.json` and commit it with the
+project:
+
+```json
+"policy": {
+  "minNetMsPerHit": 50,
+  "maxRestoreMs": 30
+}
+```
+
+Then `check` exits 4 and prints the measured value, limit, and shortfall when
+the saving is too small or the restore is too slow. To tighten or relax a
+threshold for one job without editing the config, pass `--min-net-ms` or
+`--max-restore-ms`:
+
+```sh
+cache-verdict check --min-net-ms 50
+```
+
+Both thresholds are optional. See [Savings policy](#savings-policy) for the
+JSON fields and the full exit-code table.
 
 ### Why does my report say `cache-unobserved`?
 
@@ -411,7 +543,9 @@ rm -rf .cache-verdict/
 
 ## Status
 
-Early MVP, version 0.4.0. The features above are the scope; anything not listed is not built yet.
+Early MVP. The latest published release is 0.4.0; the savings policy is merged
+and unreleased. The features above are the scope; anything not listed is not
+built yet.
 
 ## License
 

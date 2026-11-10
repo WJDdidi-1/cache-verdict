@@ -9,6 +9,11 @@ gets `Verdict: cache-pays` and exit `0`, so a team that requires at least
 This record captures the gap before the policy feature lands; it does not
 change the CLI or the config schema.
 
+> The policy has since been implemented in this tree. The clean-install
+> verification and exit 4/0 behavior are recorded in
+> [savings-policy.md](savings-policy.md), and the README documents the policy
+> block and the full exit-code table.
+
 ## Artifact and environment
 
 - CLI: published `cache-verdict@0.4.0` (`npx --yes cache-verdict@0.4.0`),
@@ -253,10 +258,10 @@ the team's 50 ms bar.
 - The config has no place to record the bar either, so the rule cannot travel
   with the project or be reviewed alongside `command`, `inputs`, and
   `cachePath`.
-- The next milestone can add the policy field and make `check` fail when the
-  measured saving is below it. This record is the "before" state that the
-  change must not silently redefine: a positive-but-small saving is currently
-  a passing `cache-pays` run.
+- The next milestone did add the policy field and made `check` fail when the
+  measured saving is below it. This record remains the "before" state that the
+  change must not silently redefine: in 0.4.0 a positive-but-small saving was a
+  passing `cache-pays` run.
 
 ## Reproduce
 
