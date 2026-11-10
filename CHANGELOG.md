@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Documentation
+
+- Recorded that `check` has no savings policy in 0.4.0: `check --help` exposes
+  no threshold flag, a freshly initialised `.cache-verdict.json` has no policy
+  field, and a measured 30.4 ms net saving per hit still produces
+  `cache-pays` and exit `0`. The [0.4.0 policy validation record](docs/validation/policy-0.4.0.md)
+  contains the published help output, the fresh config keys, and the probe run.
+
 ## [0.4.0] - 2026-11-10
 
 ### Added
