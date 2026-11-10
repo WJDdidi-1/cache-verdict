@@ -17,6 +17,7 @@ import {
   writeConfig,
 } from '../lib/config.mjs';
 import { ledgerPath, pruneStore, readLedger, storeStats } from '../lib/ledger.mjs';
+import { resolvePolicy } from '../lib/policy.mjs';
 import { analyzeSamples, formatReport } from '../lib/report.mjs';
 import { formatRunSummary, runSample } from '../lib/run.mjs';
 import {
@@ -36,7 +37,8 @@ Usage:
   cache-verdict init [directory] [options]
   cache-verdict run [directory] [--cold] [--ledger <path>]
   cache-verdict report [directory] [--json] [--ledger <path>]
-  cache-verdict check [directory] [--ledger <path>]
+  cache-verdict check [directory] [--json] [--ledger <path>]
+                      [--min-net-ms <ms>] [--max-restore-ms <ms>]
   cache-verdict prune [directory] --keep <n>
   cache-verdict --help
   cache-verdict --version
@@ -49,9 +51,11 @@ Commands:
           artifacts, and append a sample to .cache-verdict/ledger.jsonl.
   report  Print hit rate, median cold and warm totals, restore cost, net ms
           per hit, cache size, and one verdict.
-  check   Exit 0 for cache-pays, 2 for cache-costs, cache-churns,
-          cache-never-hits, or cache-unobserved, and 3 when more runs are
-          needed before a verdict is possible.
+  check   Compare the report with the savings policy in .cache-verdict.json
+          (or the --min-net-ms/--max-restore-ms overrides). Exit 0 for
+          cache-pays, 2 for cache-costs, cache-churns, cache-never-hits, or
+          cache-unobserved, 3 when more runs are needed before a verdict is
+          possible, and 4 when a policy threshold is missed.
   prune   Evict least-recently-used stored cache keys.
 
 Init options:
@@ -75,6 +79,15 @@ Report options:
       --json            Print the analysis as JSON.
   -h, --help            Show this help.
 
+Check options:
+      --json            Print the analysis, policy, and policy failures as JSON.
+      --min-net-ms <ms> Fail unless at least this many milliseconds are saved
+                        per hit; overrides policy.minNetMsPerHit.
+      --max-restore-ms <ms>
+                        Fail when the median restore takes more than this many
+                        milliseconds; overrides policy.maxRestoreMs.
+  -h, --help            Show this help.
+
 Ledger options (run, report, and check):
       --ledger <path>   Read or append samples at this file instead of
                         .cache-verdict/ledger.jsonl. Relative paths resolve
@@ -87,8 +100,10 @@ Prune options:
 
 The config records the detected build command, the files whose contents make
 up the cache key, the cache paths to measure, and why the project was detected.
-Review and edit it before sampling. Detection order is Next.js, Cargo, Gradle,
-Go, Python, then npm; use --ecosystem to override.
+Review and edit it before sampling. Add an optional "policy" object with
+"minNetMsPerHit" and/or "maxRestoreMs" to make check gate on measured savings
+instead of the verdict alone. Detection order is Next.js, Cargo, Gradle, Go,
+Python, then npm; use --ecosystem to override.
 
 Measured files live under .cache-verdict/ in the project: ledger.jsonl is the
 append-only sample history and store/ holds one content-addressed cache per
@@ -107,6 +122,7 @@ Exit codes:
   2  invalid command-line usage; check found a losing, churning, unobserved,
      or never-hitting cache
   3  check needs more runs before it can decide
+  4  check missed a threshold in the configured savings policy
 `;
 
 class UsageError extends Error {}
@@ -189,15 +205,30 @@ function parseInitOptions(args) {
   return options;
 }
 
-function parseSimpleOptions(args, knownFlags, valueFlags = []) {
+function parseSimpleOptions(args, knownFlags, valueFlags = [], numericFlags = []) {
   const options = { dir: '.', help: false };
   for (const flag of knownFlags) options[flag] = false;
-  for (const flag of valueFlags) options[flag] = null;
+  for (const flag of [...valueFlags, ...numericFlags]) options[flag] = null;
   const positional = [];
+  const allValueFlags = [...valueFlags, ...numericFlags];
+
+  function parseValue(flag, value) {
+    if (numericFlags.includes(flag)) {
+      const number = typeof value === 'string' && value.trim() !== '' ? Number(value) : Number.NaN;
+      if (!Number.isFinite(number) || number < 0) {
+        throw new UsageError(`--${flag} needs a non-negative number of milliseconds`);
+      }
+      return number;
+    }
+    if (typeof value !== 'string' || value.trim() === '') {
+      throw new UsageError(`--${flag} needs a path`);
+    }
+    return value;
+  }
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
-    const valueFlag = valueFlags.find(
+    const valueFlag = allValueFlags.find(
       (flag) => argument === `--${flag}` || argument.startsWith(`--${flag}=`),
     );
 
@@ -208,15 +239,23 @@ function parseSimpleOptions(args, knownFlags, valueFlags = []) {
       break;
     } else if (valueFlag !== undefined) {
       if (argument.startsWith(`--${valueFlag}=`)) {
-        const value = argument.slice(`--${valueFlag}=`.length);
-        if (!value.trim()) throw new UsageError(`--${valueFlag} needs a path`);
-        options[valueFlag] = value;
+        options[valueFlag] = parseValue(
+          valueFlag,
+          argument.slice(`--${valueFlag}=`.length),
+        );
       } else {
         const value = args[index + 1];
-        if (value === undefined || value.startsWith('-')) {
+        if (value === undefined) {
+          throw new UsageError(
+            numericFlags.includes(valueFlag)
+              ? `--${valueFlag} needs a non-negative number of milliseconds`
+              : `--${valueFlag} needs a path`,
+          );
+        }
+        if (!numericFlags.includes(valueFlag) && value.startsWith('-')) {
           throw new UsageError(`--${valueFlag} needs a path`);
         }
-        options[valueFlag] = value;
+        options[valueFlag] = parseValue(valueFlag, value);
         index += 1;
       }
     } else if (argument.startsWith('-') && knownFlags.includes(argument.slice(2))) {
@@ -359,8 +398,9 @@ function run(args) {
   return 0;
 }
 
-function analyzeProject(directory, ledger) {
+function analyzeProject(directory, ledger, policyOverrides) {
   const config = loadConfig(directory);
+  const policy = resolvePolicy(config.policy, policyOverrides);
   const samples = readLedger(directory, ledger);
   const stats = storeStats(directory);
   return analyzeSamples(samples, {
@@ -368,6 +408,7 @@ function analyzeProject(directory, ledger) {
     cachePaths: config.cachePath,
     storedKeys: stats.keys,
     storedSizeBytes: stats.sizeBytes,
+    policy,
   });
 }
 
@@ -390,7 +431,12 @@ function report(args) {
 }
 
 function check(args) {
-  const options = parseSimpleOptions(args, [], ['ledger']);
+  const options = parseSimpleOptions(
+    args,
+    ['json'],
+    ['ledger'],
+    ['min-net-ms', 'max-restore-ms'],
+  );
   if (options.help) {
     process.stdout.write(USAGE);
     return 0;
@@ -398,14 +444,28 @@ function check(args) {
 
   const directory = resolveDirectory(options.dir);
   const ledger = ledgerPath(directory, options.ledger);
-  const analysis = analyzeProject(directory, ledger);
-  process.stdout.write(formatReport(analysis));
+  const analysis = analyzeProject(directory, ledger, {
+    minNetMsPerHit: options['min-net-ms'],
+    maxRestoreMs: options['max-restore-ms'],
+  });
+
+  if (options.json) {
+    console.log(JSON.stringify(analysis, null, 2));
+  } else {
+    process.stdout.write(formatReport(analysis));
+  }
 
   if (analysis.moreRunsNeeded) {
     process.stderr.write(
       `cache-verdict: not enough samples yet in ${ledger}; run the build again before gating CI\n`,
     );
     return 3;
+  }
+  if (analysis.policyFailures.length > 0) {
+    for (const failure of analysis.policyFailures) {
+      process.stderr.write(`cache-verdict: ${failure.message}\n`);
+    }
+    return 4;
   }
   if (analysis.verdict === 'cache-pays') return 0;
 
