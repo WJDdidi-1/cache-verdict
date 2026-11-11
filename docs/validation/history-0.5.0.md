@@ -366,3 +366,8 @@ rm -rf "$work"
 
 The absolute timings depend on the machine; the sequence, the hit count, and
 the fact that the report stays `cache-pays` do not.
+
+The follow-up milestone prints this sequence: `report --history` now renders
+one row per sample and names the last hit when the history ends in misses, and
+`report --json` carries `history` and `regressedAt`. The clean-install proof and
+the reading guide are in [the sample-history validation record](history.md).
