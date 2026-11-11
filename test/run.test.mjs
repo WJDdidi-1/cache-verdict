@@ -10,12 +10,15 @@ import { MAX_RECORDED_INPUTS, recordInputFiles } from '../lib/key.mjs';
 
 const bin = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'cache-verdict.mjs');
 
+// The timed fixtures must leave a wider margin than a shared runner's
+// scheduling noise. With a 220 ms cold build, macos-15-intel occasionally
+// measured the warm build as slower even though it skipped the work. Block
+// for the simulated work instead of spinning so the fixture does not compete
+// with the tests running beside it.
 const FAST_BUILD = `
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 const warm = existsSync('cache/marker');
-const wait = warm ? 5 : 220;
-const start = Date.now();
-while (Date.now() - start < wait) {}
+if (!warm) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 800);
 mkdirSync('cache', { recursive: true });
 writeFileSync('cache/marker', 'artifact');
 writeFileSync('cache/payload.bin', 'x'.repeat(2048));
@@ -24,9 +27,7 @@ writeFileSync('cache/payload.bin', 'x'.repeat(2048));
 const SLOW_WARM_BUILD = `
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 const warm = existsSync('cache/marker');
-const wait = warm ? 220 : 5;
-const start = Date.now();
-while (Date.now() - start < wait) {}
+if (warm) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 800);
 mkdirSync('cache', { recursive: true });
 writeFileSync('cache/marker', 'artifact');
 `;
