@@ -36,7 +36,7 @@ const USAGE = `cache-verdict: times build-cache cold vs warm runs and says wheth
 Usage:
   cache-verdict init [directory] [options]
   cache-verdict run [directory] [--cold] [--ledger <path>]
-  cache-verdict report [directory] [--json] [--ledger <path>]
+  cache-verdict report [directory] [--history] [--json] [--ledger <path>]
   cache-verdict check [directory] [--json] [--ledger <path>]
                       [--min-net-ms <ms>] [--max-restore-ms <ms>]
   cache-verdict prune [directory] --keep <n>
@@ -50,7 +50,8 @@ Commands:
           addressed key when one exists, time the build, store the produced
           artifacts, and append a sample to .cache-verdict/ledger.jsonl.
   report  Print hit rate, median cold and warm totals, restore cost, net ms
-          per hit, cache size, and one verdict.
+          per hit, cache size, and one verdict. --history adds one row per
+          sample and the regression point.
   check   Compare the report with the savings policy in .cache-verdict.json
           (or the --min-net-ms/--max-restore-ms overrides). Exit 0 for
           cache-pays, 2 for cache-costs, cache-churns, cache-never-hits, or
@@ -76,7 +77,11 @@ Run options:
   -h, --help            Show this help.
 
 Report options:
-      --json            Print the analysis as JSON.
+      --history         Print one row per sample (index, timestamp, hit/miss,
+                        total ms, net ms) and the regression point. Net ms is
+                        the median cold total minus that sample's total.
+      --json            Print the analysis as JSON. The JSON always includes
+                        the sample history and regressedAt.
   -h, --help            Show this help.
 
 Check options:
@@ -413,7 +418,7 @@ function analyzeProject(directory, ledger, policyOverrides) {
 }
 
 function report(args) {
-  const options = parseSimpleOptions(args, ['json'], ['ledger']);
+  const options = parseSimpleOptions(args, ['history', 'json'], ['ledger']);
   if (options.help) {
     process.stdout.write(USAGE);
     return 0;
@@ -425,7 +430,7 @@ function report(args) {
   if (options.json) {
     console.log(JSON.stringify(analysis, null, 2));
   } else {
-    process.stdout.write(formatReport(analysis));
+    process.stdout.write(formatReport(analysis, { history: options.history === true }));
   }
   return 0;
 }
