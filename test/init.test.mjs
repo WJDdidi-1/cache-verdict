@@ -429,8 +429,11 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 const cache = 'node_modules/.cache';
 const warm = existsSync(cache + '/marker');
 if (!warm) {
-  const until = Date.now() + 250;
-  while (Date.now() < until) {}
+  // Make the cold build's extra work large enough to survive a busy shared
+  // runner. A 250 ms spin was within scheduler noise on macos-15-intel, so the
+  // warm build could occasionally measure slower and the verdict flipped to
+  // cache-costs. Block instead of spinning so the fixture does not add load.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
 }
 mkdirSync(cache, { recursive: true });
 writeFileSync(cache + '/marker', 'artifact');
