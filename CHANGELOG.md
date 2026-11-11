@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Documentation
+
+- Recorded that `report` in 0.5.0 hides the sample sequence: a five-sample
+  fixture whose first two samples are hits and whose last three are misses
+  still prints `Verdict: cache-pays`, and neither the text report nor
+  `report --json` names the sample where hitting stopped. `report --help`
+  offers only `--json`. The commands, output, JSON keys, and ledger rows are in
+  [the history validation record](docs/validation/history-0.5.0.md).
+
 ## [0.5.0] - 2026-11-10
 
 ### Added
