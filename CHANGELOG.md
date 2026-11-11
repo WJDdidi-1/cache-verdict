@@ -6,6 +6,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `report --history` prints one row per ledger sample, oldest first, with the
+  sample index, timestamp, hit/miss result, build plus restore total, and net
+  milliseconds against the median cold total. It also names the last hit when
+  the history ends in misses, so a cache that used to hit and then stopped is
+  visible instead of hidden by the aggregate medians.
+- `report --json` always includes the same sequence as `history` and
+  `regressedAt`, the one-based index of the last hit, or `null` when the
+  history never hit, never missed, or recovered after the misses. `--json`
+  needs no extra flag.
+- `report --help` documents `--history`, the row columns, the regression point,
+  and `regressedAt`.
+
 ### Documentation
 
 - Recorded that `report` in 0.5.0 hides the sample sequence: a five-sample
@@ -14,6 +28,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `report --json` names the sample where hitting stopped. `report --help`
   offers only `--json`. The commands, output, JSON keys, and ledger rows are in
   [the history validation record](docs/validation/history-0.5.0.md).
+- The README shows the `report --history` output verbatim, explains how to read
+  each column and the regression line, and notes that `report --json` carries
+  `history` and `regressedAt`.
+- The sample history was verified through a clean `npm pack` + install: a
+  five-run fixture whose cache hit once and then stopped prints the full row
+  sequence and `Regression: sample 2 was the last hit`, while `report --json`
+  returns `regressedAt: 2`. The commands, tarball hash, rows, and JSON are in
+  [the sample-history validation record](docs/validation/history.md).
+  `test/history-install.test.mjs` repeats the check deterministically against
+  the packed artifact.
 
 ## [0.5.0] - 2026-11-10
 

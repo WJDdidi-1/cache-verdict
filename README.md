@@ -79,6 +79,9 @@ cache-verdict run
 # See the numbers and one verdict.
 cache-verdict report
 
+# See every sample in order and whether the cache stopped hitting.
+cache-verdict report --history
+
 # Gate on the verdict and on the policy, if one is configured.
 cache-verdict check
 ```
@@ -152,7 +155,7 @@ The warm run restored 46,735,665 bytes of cache in 14.6 ms and was 2397.1 ms fas
 
 - `cache-verdict init` detects Cargo, Gradle, Next.js, npm, Python, or Go and writes a reviewable `.cache-verdict.json`; `init --github-action` also writes a GitHub Actions workflow that persists the ledger and stored cache.
 - `cache-verdict run` content-addresses the declared inputs, moves declared cache dirs aside, restores the stored cache for that exact key when it exists, times the build from that known state, stores the produced artifacts, and appends one sample to `.cache-verdict/ledger.jsonl` (or the `--ledger` / `CACHE_VERDICT_LEDGER` path). The sample records the path and SHA-256 of each declared input, bounded so a huge input tree cannot bloat the ledger.
-- `cache-verdict report` prints hit rate, median cold vs warm totals, restore cost, net ms per hit, cache size, the paths that changed since the previous sample, and one verdict: `cache-pays`, `cache-costs`, `cache-churns`, `cache-never-hits`, or `cache-unobserved`.
+- `cache-verdict report` prints hit rate, median cold vs warm totals, restore cost, net ms per hit, cache size, the paths that changed since the previous sample, and one verdict: `cache-pays`, `cache-costs`, `cache-churns`, `cache-never-hits`, or `cache-unobserved`. `report --history` adds one row per sample and names the last hit when the history ends in misses; `report --json` always includes `history` and `regressedAt`.
 - `cache-verdict check` exits 2 on a losing, churning, or unobserved cache and 3 when more runs are needed, so CI can gate on the verdict. It also enforces an optional savings policy and exits 4 when a configured minimum saving or maximum restore cost is missed.
 - `cache-verdict prune --keep N` evicts least-recently-used stored keys; `run --cold` adds a baseline sample without wedging the next hit.
 
@@ -278,6 +281,44 @@ the policy failure is reported and `check` exits 4.
 | `cache-unobserved` | There is no cache path, no ledger, only one cold sample, or no cold baseline yet. |
 
 The report uses medians so one noisy sample does not decide the verdict. `Net ms per hit` is the median cold total minus the median warm total, where the warm total already includes restore time.
+
+## Reading the sample history
+
+The aggregate report can say `cache-pays` even when the cache stopped working: the medians still include the old hits. `report --history` prints the sequence the ledger already holds, so a cache that used to hit and then stopped is visible:
+
+```console
+$ cache-verdict report --history
+Runs: 5 (1 hit, 4 misses)
+Hit rate: 20.0%
+Median cold total: 206.1 ms
+Median warm total: 62.6 ms
+Restore cost: 0.9 ms
+Net ms per hit: 143.5 ms
+Cache size: 17 B across 1 stored key
+Changed inputs since previous sample: none
+Verdict: cache-pays
+Reason: warm builds are 143.5 ms faster per hit after paying the restore cost
+
+History:
+  #  Timestamp                 Result      Total        Net
+   1  2026-11-11T17:32:36.788Z  MISS     206.7 ms    -0.6 ms
+   2  2026-11-11T17:32:36.916Z  HIT       62.6 ms   143.5 ms
+   3  2026-11-11T17:32:37.191Z  MISS     205.6 ms     0.5 ms
+   4  2026-11-11T17:32:37.466Z  MISS     206.5 ms    -0.4 ms
+   5  2026-11-11T17:32:37.741Z  MISS     205.6 ms     0.4 ms
+Regression: sample 2 was the last hit; no sample has hit since.
+```
+
+Read the columns as follows:
+
+- `#` is the sample's one-based position in the ledger, oldest first.
+- `Timestamp` is when that sample was recorded.
+- `Result` is `HIT` for a restored sample and `MISS` for a cold sample.
+- `Total` is that sample's build plus restore time.
+- `Net` is the median cold total minus that sample's total. Positive rows were faster than the median cold build; negative rows were slower.
+- `Regression:` names the last hit before the trailing run of misses. Here samples 3-5 are all misses after the hit at sample 2, so the cache stopped being restored at sample 3. If the history never hit, never missed, or hit again after a run of misses, the report says there is no regression instead of guessing.
+
+The aggregate `Verdict: cache-pays` and the `Regression:` line answer different questions: the verdict says the warm samples were cheaper on average, while the history says whether the cache is still producing them. Check the history before trusting an old verdict. `report --json` always includes the same sequence as `history` (each row has `index`, `timestamp`, `hit`, `totalMs`, and `netMs`) plus `regressedAt`, the one-based index of the last hit or `null` when there is no regression. The clean-install proof and the full fixture are in [the sample-history validation record](docs/validation/history.md).
 
 ## The ledger and stored cache
 
@@ -414,7 +455,7 @@ cache-verdict run --cold
 
 ## How we know it works
 
-`npm test` runs the full suite. CI runs it on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22, then packs the tarball, installs it into a clean project, and runs the installed `cache-verdict` command. The published 0.1.0 tarball was also run end to end with `npx` on a fresh Next.js project outside this repository (numbers above and [validation record](docs/validation/nextjs-0.1.0.md)). The two-build shared-ledger CI pattern was verified with a scripted simulation of two fresh checkouts; its [validation record](docs/validation/ci-ledger-checkout.md) shows the first `check` exiting 3 and the second exiting 0 after the ledger and store were persisted. The generated GitHub Actions workflow was verified by writing it from a fixture, asserting each step and cache key, and running the same ledger path and command sequence locally; the [recipe validation record](docs/validation/github-action-recipe.md) shows the generated file, both `check` exit codes, and the resulting ledger and store. The changed-input explanation was verified with scripted two-run and cold/warm/edit probes; its [validation record](docs/validation/churn-explanation.md) shows the edited path in the text report, the `cache-churns` reason, and `report --json`, with the matching per-file hashes in the ledger. The savings policy was verified through a clean `npm pack` + install: the installed CLI exits 4 with the measured value, limit, and shortfall for a strict policy, and exits 0 for a permissive policy or a `--min-net-ms` override; the [savings-policy validation record](docs/validation/savings-policy.md) has the tarball hash, commands, output, and exit codes. The end-to-end tests build throwaway projects and assert:
+`npm test` runs the full suite. CI runs it on Ubuntu, macOS, and Windows with Node.js 18, 20, and 22, then packs the tarball, installs it into a clean project, and runs the installed `cache-verdict` command. The published 0.1.0 tarball was also run end to end with `npx` on a fresh Next.js project outside this repository (numbers above and [validation record](docs/validation/nextjs-0.1.0.md)). The two-build shared-ledger CI pattern was verified with a scripted simulation of two fresh checkouts; its [validation record](docs/validation/ci-ledger-checkout.md) shows the first `check` exiting 3 and the second exiting 0 after the ledger and store were persisted. The generated GitHub Actions workflow was verified by writing it from a fixture, asserting each step and cache key, and running the same ledger path and command sequence locally; the [recipe validation record](docs/validation/github-action-recipe.md) shows the generated file, both `check` exit codes, and the resulting ledger and store. The changed-input explanation was verified with scripted two-run and cold/warm/edit probes; its [validation record](docs/validation/churn-explanation.md) shows the edited path in the text report, the `cache-churns` reason, and `report --json`, with the matching per-file hashes in the ledger. The savings policy was verified through a clean `npm pack` + install: the installed CLI exits 4 with the measured value, limit, and shortfall for a strict policy, and exits 0 for a permissive policy or a `--min-net-ms` override; the [savings-policy validation record](docs/validation/savings-policy.md) has the tarball hash, commands, output, and exit codes. The sample history was verified the same way: a clean `npm pack` + install on a five-run fixture whose cache hit once and then stopped prints one row per sample, ends with `Regression: sample 2 was the last hit`, and returns `regressedAt: 2` from `report --json`; the [sample-history validation record](docs/validation/history.md) has the tarball hash, commands, rows, and JSON. The end-to-end tests build throwaway projects and assert:
 
 - an identical key restores on the second run and reports `cache-pays` with exit 0;
 - a slower warm build reports `cache-costs` with exit 2;
@@ -433,6 +474,7 @@ cache-verdict run --cold
 - `check` passes a configured policy, exits 4 with the threshold name, measured value, limit, and shortfall when `minNetMsPerHit` or `maxRestoreMs` is missed, and still returns the verdict-only 0, 2, and 3 codes when no policy is set;
 - `--min-net-ms` and `--max-restore-ms` override the config policy per threshold, both flag forms work, and an invalid or malformed threshold is rejected;
 - a clean `npm pack` + install exposes the policy flags, exits 4 with the shortfall for a strict policy, and exits 0 for a permissive policy and a command-line override;
+- a clean `npm pack` + install prints one history row per sample, names the last hit when the history ends in misses, and returns the same `history` and `regressedAt` from `report --json`;
 - `init` without the flag writes no workflow, `init --github-action` preserves an existing reviewed config, `--dry-run --github-action` writes neither file, and an existing workflow is only replaced with `--force`;
 - `report --json` and the initial "not enough samples" check behave as documented.
 
