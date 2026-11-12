@@ -154,10 +154,11 @@ The warm run restored 46,735,665 bytes of cache in 14.6 ms and was 2397.1 ms fas
 ## What the MVP does
 
 - `cache-verdict init` detects Cargo, Gradle, Next.js, npm, Python, or Go and writes a reviewable `.cache-verdict.json`; `init --github-action` also writes a GitHub Actions workflow that persists the ledger and stored cache.
-- `cache-verdict run` content-addresses the declared inputs, moves declared cache dirs aside, restores the stored cache for that exact key when it exists, times the build from that known state, stores the produced artifacts, and appends one sample to `.cache-verdict/ledger.jsonl` (or the `--ledger` / `CACHE_VERDICT_LEDGER` path). The sample records the path and SHA-256 of each declared input, bounded so a huge input tree cannot bloat the ledger.
+- `cache-verdict run` content-addresses the declared inputs, moves declared cache dirs aside, restores the stored cache for that exact key when it exists, times the build from that known state, stores the produced artifacts, and appends one sample to `.cache-verdict/ledger.jsonl` (or the `--ledger` / `CACHE_VERDICT_LEDGER` path). The sample records the path and SHA-256 of each declared input, bounded so a huge input tree cannot bloat the ledger. `run --json` prints that sample instead of the text summary, with the build's output on stderr so stdout stays valid JSON.
 - `cache-verdict report` prints hit rate, median cold vs warm totals, restore cost, net ms per hit, cache size, the paths that changed since the previous sample, and one verdict: `cache-pays`, `cache-costs`, `cache-churns`, `cache-never-hits`, or `cache-unobserved`. `report --history` adds one row per sample and names the last hit when the history ends in misses; `report --json` always includes `history` and `regressedAt`.
 - `cache-verdict check` exits 2 on a losing, churning, or unobserved cache and 3 when more runs are needed, so CI can gate on the verdict. It also enforces an optional savings policy and exits 4 when a configured minimum saving or maximum restore cost is missed.
-- `cache-verdict prune --keep N` evicts least-recently-used stored keys; `run --cold` adds a baseline sample without wedging the next hit.
+- `cache-verdict prune --keep N` evicts least-recently-used stored keys; `prune --json` prints the kept and evicted keys. `run --cold` adds a baseline sample without wedging the next hit.
+- Every `--json` payload starts with `"schemaVersion": 1`; see [JSON output contract](#json-output-contract).
 
 ## The config
 
@@ -269,6 +270,31 @@ The policy is checked from the same medians the report prints, after the
 samples needed for a verdict exist. It does not override a losing verdict:
 `cache-costs` still exits 2 unless a policy threshold also fails, in which case
 the policy failure is reported and `check` exits 4.
+
+### JSON output contract
+
+Every `--json` payload starts with `"schemaVersion": 1` at the top level, so a
+CI script can accept the versions it knows and fail closed on an unexpected
+one:
+
+| Command | Top-level payload |
+| --- | --- |
+| `report --json` | The analysis: `verdict`, `reason`, medians, cache size, `inputChanges`, `history`, `regressedAt`, `policy`, and `policyFailures`. |
+| `check --json` | The same analysis as `report --json`, including the evaluated policy and failures. |
+| `run --json` | The sample just appended to the ledger, including its key, timings, and recorded input hashes. |
+| `prune --json` | `kept` and `evicted` arrays of stored cache keys. |
+
+`schemaVersion` changes only when a field is removed, renamed, or given a new
+meaning; adding a field is backwards compatible. Pin the version before
+reading any other field:
+
+```sh
+cache-verdict report --json > report.json
+node -e 'const r = require("./report.json"); if (r.schemaVersion !== 1) process.exit(1)'
+```
+
+`run --json` keeps stdout valid JSON by sending the build command's stdout and
+stderr to stderr, so parse the CLI's stdout rather than the combined log.
 
 ## What the verdicts mean
 

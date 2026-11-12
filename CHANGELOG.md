@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Every `--json` payload now starts with `"schemaVersion": 1` at the top
+  level: `report`, `check`, `run`, and `prune`. A CI script can pin the
+  contract and fail closed instead of treating a renamed or removed field as
+  a silent success. The README documents each payload and the exit codes, and
+  adding a field does not bump the version.
+- `run --json` prints the sample just appended to the ledger. The build
+  command's stdout and stderr go to stderr in this mode so the CLI's stdout
+  stays parseable JSON.
+- `prune --json` prints the kept and evicted stored cache keys.
+
 ## [0.6.0] - 2026-11-11
 
 ### Added

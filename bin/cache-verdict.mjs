@@ -18,7 +18,7 @@ import {
 } from '../lib/config.mjs';
 import { ledgerPath, pruneStore, readLedger, storeStats } from '../lib/ledger.mjs';
 import { resolvePolicy } from '../lib/policy.mjs';
-import { analyzeSamples, formatReport } from '../lib/report.mjs';
+import { SCHEMA_VERSION, analyzeSamples, formatReport } from '../lib/report.mjs';
 import { formatRunSummary, runSample } from '../lib/run.mjs';
 import {
   WORKFLOW_PATH,
@@ -35,11 +35,11 @@ const USAGE = `cache-verdict: times build-cache cold vs warm runs and says wheth
 
 Usage:
   cache-verdict init [directory] [options]
-  cache-verdict run [directory] [--cold] [--ledger <path>]
+  cache-verdict run [directory] [--cold] [--json] [--ledger <path>]
   cache-verdict report [directory] [--history] [--json] [--ledger <path>]
   cache-verdict check [directory] [--json] [--ledger <path>]
                       [--min-net-ms <ms>] [--max-restore-ms <ms>]
-  cache-verdict prune [directory] --keep <n>
+  cache-verdict prune [directory] --keep <n> [--json]
   cache-verdict --help
   cache-verdict --version
 
@@ -74,6 +74,8 @@ Init options:
 Run options:
       --cold            Force a cold baseline sample. A stored cache is kept
                         for the next normal run, so it does not prevent a hit.
+      --json            Print the recorded sample as JSON. The build's stdout
+                        and stderr go to stderr so stdout stays valid JSON.
   -h, --help            Show this help.
 
 Report options:
@@ -101,7 +103,12 @@ Ledger options (run, report, and check):
 
 Prune options:
   -k, --keep <n>        Number of most-recently-used stored keys to retain.
+      --json            Print the kept and evicted keys as JSON.
   -h, --help            Show this help.
+
+Every --json payload starts with "schemaVersion": 1 at the top level. The
+version only changes when a field is removed, renamed, or given a new meaning;
+adding a field is backwards compatible.
 
 The config records the detected build command, the files whose contents make
 up the cache key, the cache paths to measure, and why the project was detected.
@@ -278,13 +285,15 @@ function parseSimpleOptions(args, knownFlags, valueFlags = [], numericFlags = []
 }
 
 function parsePruneOptions(args) {
-  const options = { dir: '.', keep: null, help: false };
+  const options = { dir: '.', keep: null, json: false, help: false };
   const positional = [];
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === '--help' || argument === '-h') {
       options.help = true;
+    } else if (argument === '--json') {
+      options.json = true;
     } else if (argument === '--keep' || argument === '-k') {
       const value = args[index + 1];
       if (value === undefined || value.startsWith('-')) {
@@ -389,7 +398,7 @@ function init(args) {
 }
 
 function run(args) {
-  const options = parseSimpleOptions(args, ['cold'], ['ledger']);
+  const options = parseSimpleOptions(args, ['cold', 'json'], ['ledger']);
   if (options.help) {
     process.stdout.write(USAGE);
     return 0;
@@ -398,8 +407,16 @@ function run(args) {
   const directory = resolveDirectory(options.dir);
   const config = loadConfig(directory);
   const ledger = ledgerPath(directory, options.ledger);
-  const sample = runSample(directory, { cold: options.cold, ledgerPath: ledger });
-  console.log(formatRunSummary(sample, config));
+  const sample = runSample(directory, {
+    cold: options.cold,
+    ledgerPath: ledger,
+    json: options.json === true,
+  });
+  if (options.json) {
+    console.log(JSON.stringify({ ...sample, schemaVersion: SCHEMA_VERSION }, null, 2));
+  } else {
+    console.log(formatRunSummary(sample, config));
+  }
   return 0;
 }
 
@@ -488,9 +505,19 @@ function prune(args) {
   const directory = resolveDirectory(options.dir);
   loadConfig(directory);
   const result = pruneStore(directory, options.keep);
-  console.log(
-    `Kept ${result.kept.length} stored key${result.kept.length === 1 ? '' : 's'}; evicted ${result.evicted.length}.`,
-  );
+  if (options.json) {
+    console.log(
+      JSON.stringify(
+        { schemaVersion: SCHEMA_VERSION, kept: result.kept, evicted: result.evicted },
+        null,
+        2,
+      ),
+    );
+  } else {
+    console.log(
+      `Kept ${result.kept.length} stored key${result.kept.length === 1 ? '' : 's'}; evicted ${result.evicted.length}.`,
+    );
+  }
   return 0;
 }
 
