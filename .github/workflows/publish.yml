@@ -49,6 +49,14 @@ jobs:
           npm init -y >/dev/null
           npm install ../dist/*.tgz
           node -e "const p=require('../package.json'); const bin=Object.values(p.bin||{})[0]; if(!bin) process.exit(0); require('child_process').execFileSync(process.execPath, ['../'+bin, '--version'], {stdio:'inherit'})"
+      - name: every CI job on this commit must be green
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: node scripts/publish-ci-gate.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: tarball
