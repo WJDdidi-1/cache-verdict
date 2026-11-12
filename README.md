@@ -275,26 +275,50 @@ the policy failure is reported and `check` exits 4.
 
 Every `--json` payload starts with `"schemaVersion": 1` at the top level, so a
 CI script can accept the versions it knows and fail closed on an unexpected
-one:
-
-| Command | Top-level payload |
-| --- | --- |
-| `report --json` | The analysis: `verdict`, `reason`, medians, cache size, `inputChanges`, `history`, `regressedAt`, `policy`, and `policyFailures`. |
-| `check --json` | The same analysis as `report --json`, including the evaluated policy and failures. |
-| `run --json` | The sample just appended to the ledger, including its key, timings, and recorded input hashes. |
-| `prune --json` | `kept` and `evicted` arrays of stored cache keys. |
-
-`schemaVersion` changes only when a field is removed, renamed, or given a new
-meaning; adding a field is backwards compatible. Pin the version before
-reading any other field:
+one. `schemaVersion` changes only when a required key is removed, renamed, or
+given a new meaning; adding an optional key is backwards compatible. Pin the
+version before reading any other field:
 
 ```sh
 cache-verdict report --json > report.json
 node -e 'const r = require("./report.json"); if (r.schemaVersion !== 1) process.exit(1)'
 ```
 
-`run --json` keeps stdout valid JSON by sending the build command's stdout and
-stderr to stderr, so parse the CLI's stdout rather than the combined log.
+These are the required keys for `schemaVersion` 1. A release that drops or
+renames one of them must bump `schemaVersion` and this section;
+`test/json-contract.test.mjs` fails when either side drifts.
+
+`report --json` and `check --json` always include these top-level keys:
+`schemaVersion`, `runs`, `hits`, `misses`, `hitRate`, `coldRuns`, `warmRuns`,
+`uniqueKeys`, `medianColdMs`, `medianWarmMs`, `restoreMs`, `netMsPerHit`,
+`storedKeys`, `cacheSizeBytes`, `cachePaths`, `cacheState`, `inputChanges`,
+`history`, `regressedAt`, `verdict`, `moreRunsNeeded`, `reason`, `policy`, and
+`policyFailures`.
+
+`run --json` prints the sample just appended to the ledger, with these
+top-level keys: `schemaVersion`, `timestamp`, `key`, `hit`, `miss`, `cold`,
+`warm`, `temperature`, `forcedCold`, `buildMs`, `restoreMs`, `restoreCostMs`,
+`totalMs`, `sizeBytes`, `cacheSizeBytes`, `restoreSizeBytes`, `stored`,
+`command`, `inputs`, `inputCount`, and `inputsTruncated`.
+
+`prune --json` prints `schemaVersion`, `kept`, and `evicted`. Both arrays hold
+stored cache keys.
+
+The required nested shapes are:
+
+- `history[]` rows: `index`, `timestamp`, `hit`, `totalMs`, and `netMs`.
+- `inputChanges`: `available`, `reason`, `paths`, `changes`, and `truncated`.
+  When `available` is `true` it also has `previousKey`, `currentKey`,
+  `previousTimestamp`, and `currentTimestamp`.
+- `inputChanges.changes[]` rows: `path`, `change`, `before`, and `after`.
+- `policy`: `minNetMsPerHit` and `maxRestoreMs`, `null` when unset.
+- `policyFailures[]` rows: `threshold`, `measured`, `limit`, `shortfall`, and
+  `message`.
+- `run`'s `inputs[]` rows: `path` and `sha256`.
+
+Additional keys may be added without a version bump. `run --json` keeps stdout
+valid JSON by sending the build command's stdout and stderr to stderr, so parse
+the CLI's stdout rather than the combined log.
 
 ## What the verdicts mean
 
